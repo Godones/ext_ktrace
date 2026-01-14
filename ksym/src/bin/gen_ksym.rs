@@ -269,14 +269,6 @@ fn read_symbol(line: &str) -> Option<(String, u64, char)> {
     let vaddr = u64::from_str_radix(parts.next()?, 16).ok()?;
     let symbol_type = parts.next()?.chars().next()?;
     let mut symbol = parts.collect::<Vec<_>>().join(" ");
-    // local symbol or global symbol in text section
-    if symbol_type != 'T' && symbol_type != 't' {
-        return None;
-    }
-    // skip $x symbol
-    if symbol.contains("$x") {
-        return None;
-    }
     if symbol.starts_with("_ZN") {
         symbol = format!("{:#}", rustc_demangle::demangle(&symbol));
     } else {

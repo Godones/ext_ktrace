@@ -106,8 +106,8 @@ KallsymsBlob 是构建期的数据容器，用于收集符号并压缩、序列�
 ## 生成与使用
 
 - 生成：
-  - 将 nm -n -C {ELF} 作为标准输入（仅保留 T/t），执行本工具二进制，例如：
-    - `nm -n -C {ELF} | grep ' [Tt] ' | grep -v '\.L' | grep -v '$x' | cargo run -p ksym-bin --bin gen_ksym --features demangle > kallsyms.bin`
+  - 将 nm -n -C {ELF} 作为标准输入（仅保留 T/t/B/D/R），执行本工具二进制，例如：
+    - `nm -n -C {ELF} | grep ' [TtBDR] ' | grep -v '\.L' | grep -v '$x' | cargo run -p ksym-bin --bin gen_ksym --features demangle > kallsyms.bin`
 - 读取（消费者侧）：
   - 使用 `ksym_bin::KallsymsMapped::from_blob(&blob, stext, etext)` 零拷贝解析；
   - 可调用 `lookup_address`、`lookup_name`、或 `dump_all_symbols()` 获取数据（dump 输出形如：`<addr_hex> <type_char> <name>`）。
