@@ -57,17 +57,16 @@ impl BpfProgMeta {
     /// Try to create a `BpfProgMeta` from a `bpf_attr` structure.
     pub fn try_from_bpf_attr<F: KernelAuxiliaryOps>(attr: &bpf_attr) -> Result<Self> {
         let u = unsafe { &attr.__bindgen_anon_3 };
-        let prog_type =
-            bpf_prog_type::try_from(u.prog_type).map_err(|_| BpfError::InvalidArgument)?;
-        let expected_attach_type = bpf_attach_type::try_from(u.expected_attach_type)
-            .map_err(|_| BpfError::InvalidArgument)?;
+        let prog_type = bpf_prog_type::try_from(u.prog_type).map_err(|_| BpfError::EINVAL)?;
+        let expected_attach_type =
+            bpf_attach_type::try_from(u.expected_attach_type).map_err(|_| BpfError::EINVAL)?;
         let name_slice = unsafe {
             core::slice::from_raw_parts(u.prog_name.as_ptr() as *const u8, u.prog_name.len())
         };
         let prog_name = CStr::from_bytes_until_nul(name_slice)
-            .map_err(|_| BpfError::InvalidArgument)?
+            .map_err(|_| BpfError::EINVAL)?
             .to_str()
-            .map_err(|_| BpfError::InvalidArgument)?
+            .map_err(|_| BpfError::EINVAL)?
             .to_string();
         let license = if u.license != 0 {
             F::string_from_user_cstr(u.license as *const u8)?

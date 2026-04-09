@@ -1,55 +1,115 @@
-# BPF-basic
+# kbpf-basic
 
-A Rust library providing basic abstractions and utilities for eBPF (Extended Berkeley Packet Filter) programming.
+A `no_std` Rust eBPF foundation library for kernel or kernel-like environments.
 
-## Overview
+It mainly provides three kinds of capabilities:
 
-BPF-basic is a no_std Rust crate that provides essential abstractions and utilities for eBPF programming. It offers a unified interface for working with eBPF maps and helper functions, making it easier to write eBPF programs in Rust.
+- Rust bindings for the Linux eBPF UAPI
+- Unified abstractions for common BPF maps and helpers
+- Basic support for program preprocessing, perf events, and raw tracepoints
 
-## Features
+This crate is better suited as a building block for an eBPF runtime or host-side implementation than as a standalone userspace loader.
 
-- **Unified Map Interface**: Provides a consistent interface for working with different types of eBPF maps
-- **Map Types Support**:
-  - Array maps
-  - Hash maps
-  - LRU maps
-  - Queue maps
-- **Helper Functions**: Common eBPF helper functions and utilities
-- **Kernel Auxiliary Operations**: Trait for kernel-specific operations
-- **Error Handling**: Custom error types for eBPF operations
+## What This Crate Is For
 
-## Usage
+`kbpf-basic` pulls together the parts of an eBPF runtime that are closely related to execution and are otherwise easy to reimplement repeatedly:
 
-The crate is designed to be used in eBPF programs. Here's a basic example of how to use it:
+- `linux_bpf`: Linux BPF constants, enums, and struct bindings
+- `map`: map metadata parsing, map creation, and common map operations
+- `helper`: host-side entry points for common BPF helpers
+- `prog`: program metadata and verifier log information parsing
+- `perf`: perf event structures and buffer support
+- `raw_tracepoint`: raw tracepoint attach argument parsing
+- `EBPFPreProcessor`: map fd / map value relocation before program loading
 
-```rust no_run
-use bpf_basic::{KernelAuxiliaryOps, UnifiedMap, Result};
+## Current Capabilities
 
-// Implement the KernelAuxiliaryOps trait for your environment
-struct MyKernelOps;
+The current codebase implements or exposes the following:
 
-impl KernelAuxiliaryOps for MyKernelOps {
-    // Implement required methods
+- Supported map types
+  - `ARRAY`
+  - `PERCPU_ARRAY`
+  - `PERF_EVENT_ARRAY`
+  - `HASH`
+  - `PERCPU_HASH`
+  - `LRU_HASH`
+  - `LRU_PERCPU_HASH`
+  - `QUEUE`
+  - `STACK`
+  - `RINGBUF`
+- Common map operations
+  - `lookup`
+  - `update`
+  - `delete`
+  - `get_next_key`
+  - `lookup_and_delete`
+  - `for_each`
+  - queue/stack `push` / `pop` / `peek`
+- Helper and runtime support
+  - `bpf_trace_printk`-style output
+  - `bpf_perf_event_output`
+  - `bpf_probe_read`
+  - `bpf_ktime_get_ns`
+  - ring buffer helper
+  - raw tracepoint argument parsing
+  - perf event mmap/ring page support
+
+## What The Host Must Implement
+
+This crate does not perform all kernel-specific work by itself. The host environment is expected to implement two key traits:
+
+- `KernelAuxiliaryOps`
+  - Handles map fd/pointer resolution, user-kernel memory copy, time, output, page allocation, and virtual mapping
+- `PerCpuVariantsOps`
+  - Handles per-CPU data creation and CPU count discovery
+
+If these traits are not properly wired into your host, many APIs will still compile but will fail at runtime.
+
+## Basic Integration Flow
+
+A typical integration flow looks like this:
+
+1. Implement `KernelAuxiliaryOps` and `PerCpuVariantsOps` in your host environment.
+2. Build map metadata from `BpfMapMeta` or `bpf_attr`.
+3. Create a `UnifiedMap` with `bpf_map_create`.
+4. Run `EBPFPreProcessor` before loading the program to relocate map references.
+5. Initialize the helper dispatch table with `init_helper_functions`.
+6. Parse program metadata, perf arguments, or raw tracepoint arguments as needed.
+
+## Minimal Sketch
+
+The following example only shows how the pieces fit together. It is not a complete runnable implementation:
+
+```rust,ignore
+use kbpf_basic::{
+    EBPFPreProcessor, KernelAuxiliaryOps,
+    map::{BpfMapMeta, PerCpuVariantsOps, bpf_map_create},
+};
+
+struct KernelOps;
+struct PerCpuOps;
+
+impl KernelAuxiliaryOps for KernelOps { /* host-side implementation */ }
+impl PerCpuVariantsOps for PerCpuOps { /* per-cpu implementation */ }
+
+fn setup(map_meta: BpfMapMeta, insns: Vec<u8>) {
+    let _map = bpf_map_create::<KernelOps, PerCpuOps>(map_meta, None).unwrap();
+    let _relocated = EBPFPreProcessor::preprocess::<KernelOps>(insns).unwrap();
 }
-
-fn kernel_create_map_syscall(){
-    let map = bpf_map_create::<MyKernelOps>();
-}
-
 ```
 
-## Error Handling
+## Development Notes
 
-The crate defines a custom `BpfError` enum with the following variants:
-- `InvalidArgument`: Invalid argument provided
-- `NotSupported`: Operation not supported
-- `NotFound`: Resource not found
-- `NoSpace`: Insufficient space
+- This is a `no_std` crate.
+- The code uses `#![feature(c_variadic)]`, so it currently requires nightly Rust.
+- The repository passes a basic `cargo check`.
 
+## Good Fit For
 
-## Example
-- See [DragonOS eBPF with Kprobe](https://github.com/DragonOS-Community/DragonOS/blob/master/kernel/src/perf/kprobe.rs) for more details.
-- See [DragonOS eBPF with Tracepoint](https://github.com/DragonOS-Community/DragonOS/blob/master/kernel/src/perf/tracepoint.rs) for more details.
-- See [Alien eBPF with Kprobe](https://github.com/Godones/Alien/blob/main/kernel/src/perf/kprobe.rs) for more details.
-- See [Hermit eBPF with Tracepoint](https://github.com/os-module/hermit-kernel/blob/dev/src/tracepoint/hook.rs)
+This crate is a good fit if you are:
 
+- building an eBPF subsystem inside your own kernel
+- integrating eBPF into a unikernel, exokernel, or teaching kernel
+- implementing Linux-like eBPF runtime behavior in a non-Linux environment
+
+If your goal is to load and manage eBPF programs directly from Linux userspace, you will usually still need a loader, verifier, object parsing, and attach flow around this crate. Covering the full userspace experience is not its goal.

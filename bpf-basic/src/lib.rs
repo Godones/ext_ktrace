@@ -22,45 +22,8 @@ pub mod raw_tracepoint;
 
 pub use preprocessor::EBPFPreProcessor;
 
-/// A specialized `Result` type for BPF operations.
-pub type Result<T> = core::result::Result<T, BpfError>;
-
-/// BPF-related error codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BpfError {
-    /// Resource not found.
-    NotFound = 2,
-    /// Argument too large.
-    TooBig = 7,
-    /// Resource temporarily unavailable.
-    TryAgain = 11,
-    /// Invalid argument.
-    InvalidArgument = 22,
-    /// No memory space left.
-    NoSpace = 28,
-    /// Operation not supported.
-    NotSupported = 95,
-}
-
-impl From<BpfError> for i64 {
-    fn from(val: BpfError) -> Self {
-        -(val as i64)
-    }
-}
-
-impl core::fmt::Display for BpfError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            BpfError::InvalidArgument => write!(f, "Invalid argument"),
-            BpfError::NotSupported => write!(f, "Not supported"),
-            BpfError::NotFound => write!(f, "Not found"),
-            BpfError::NoSpace => write!(f, "No space"),
-            BpfError::TryAgain => write!(f, "Try again"),
-            BpfError::TooBig => write!(f, "Too big"),
-        }
-    }
-}
-impl core::error::Error for BpfError {}
+type Result<T> = axerrno::LinuxResult<T>;
+type BpfError = axerrno::LinuxError;
 
 /// PollWaiter trait for maps that support polling.
 pub trait PollWaker: Send + Sync {
@@ -117,26 +80,26 @@ impl KernelAuxiliaryOps for DummyAuxImpl {
     where
         F: FnOnce(&mut UnifiedMap) -> Result<R>,
     {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn get_unified_map_from_fd<F, R>(_map_fd: u32, _func: F) -> Result<R>
     where
         F: FnOnce(&mut UnifiedMap) -> Result<R>,
     {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn get_unified_map_ptr_from_fd(_map_fd: u32) -> Result<*const u8> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn copy_from_user(_src: *const u8, _size: usize, _dst: &mut [u8]) -> Result<()> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn copy_to_user(_dest: *mut u8, _size: usize, _src: &[u8]) -> Result<()> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn current_cpu_id() -> u32 {
@@ -149,29 +112,29 @@ impl KernelAuxiliaryOps for DummyAuxImpl {
         _flags: u32,
         _data: &[u8],
     ) -> Result<()> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn string_from_user_cstr(_ptr: *const u8) -> Result<String> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn ebpf_write_str(_str: &str) -> Result<()> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn ebpf_time_ns() -> Result<u64> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn alloc_page() -> Result<usize> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn free_page(_phys_addr: usize) {}
 
     fn vmap(_phys_addrs: &[usize]) -> Result<usize> {
-        Err(BpfError::NotSupported)
+        Err(BpfError::EPERM)
     }
 
     fn unmap(_vaddr: usize) {}

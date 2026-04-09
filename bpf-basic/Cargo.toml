@@ -1,12 +1,13 @@
 [package]
-name = "bpf-basic"
-version = "0.1.0"
+name = "kbpf-basic"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
-printf-compat = { git = "https://github.com/lights0123/printf-compat", default-features = false, rev = "ad00c19" }
-bitflags = "2.10"
-lru = { version = "0.14", features = ["nightly"] }
+printf-compat = "0.3"
+bitflags = "2"
+lru = "0.16.3"
 log = "0.4"
-rbpf = { git = "https://github.com/qmonnet/rbpf", default-features = false }
+rbpf = "0.4"
 int-enum = "1.2"
+axerrno = "0.2"

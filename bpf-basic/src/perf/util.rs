@@ -88,14 +88,14 @@ impl PerfProbeArgs {
         group_fd: i32,
         flags: u32,
     ) -> Result<Self> {
-        let ty = PerfTypeId::try_from(attr.type_).map_err(|_| BpfError::InvalidArgument)?;
+        let ty = PerfTypeId::try_from(attr.type_).map_err(|_| BpfError::EINVAL)?;
         let config = match ty {
             PerfTypeId::PERF_TYPE_KPROBE
             | PerfTypeId::PERF_TYPE_UPROBE
             | PerfTypeId::PERF_TYPE_TRACEPOINT => PerfProbeConfig::Raw(attr.config),
             _ => {
-                let sw_id = perf_sw_ids::try_from(attr.config as u32)
-                    .map_err(|_| BpfError::InvalidArgument)?;
+                let sw_id =
+                    perf_sw_ids::try_from(attr.config as u32).map_err(|_| BpfError::EINVAL)?;
                 PerfProbeConfig::PerfSwIds(sw_id)
             }
         };

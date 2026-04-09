@@ -1,21 +1,18 @@
 [package]
 name = "kprobe"
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
-authors.workspace = true
 license-file.workspace = true
-homepage.workspace = true
-repository.workspace = true
-description = "A Rust crate for implementing kernel probes (kprobes) in operating systems."
+description = "A no_std Rust probe infrastructure crate for kprobe, kretprobe, and uprobe on multiple architectures."
+readme = "README.md"
+keywords = ["kprobe", "uprobe", "kernel", "tracing", "no-std"]
 
 [dependencies]
-log = "0.4.21"
+log = "0.4"
 lock_api = "0.4"
 cfg-if = "1.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 yaxpeax-x86 = { version = "2", default-features = false, features = ["fmt"] }
 yaxpeax-arch = { version = "0.3", default-features = false }
-
-[dev-dependencies]
-spin = "0.10"

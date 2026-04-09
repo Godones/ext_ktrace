@@ -39,7 +39,7 @@ impl EBPFPreProcessor {
                             unified_map.map().map_values_ptr_range()
                         })?;
                         let offset = next_insn.imm as usize;
-                        log::info!(
+                        log::trace!(
                             "Relocate for BPF_PSEUDO_MAP_VALUE, instruction index: {}, map_fd: {}, ptr: {:#x}, offset: {}",
                             index,
                             map_fd,
@@ -49,11 +49,8 @@ impl EBPFPreProcessor {
                         Some(value_ptr.start + offset)
                     }
                     BPF_PSEUDO_MAP_FD => {
-                        // dst = map_by_fd(imm)
-                        // map_by_fd(imm) means to convert a 32-bit file descriptor into an address of a map
-                        // todo!(warning: We need release after prog unload)
                         let map_ptr = F::get_unified_map_ptr_from_fd(map_fd as u32)? as usize;
-                        log::info!(
+                        log::trace!(
                             "Relocate for BPF_PSEUDO_MAP_FD, instruction index: {}, map_fd: {}, ptr: {:#x}",
                             index,
                             map_fd,

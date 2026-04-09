@@ -71,11 +71,7 @@ impl<F: KprobeAuxiliaryOps> Drop for LA64ProbePoint<F> {
         F::set_writeable_for_address(address, EBREAK_INST_LEN, self.user_pid, |ptr| {
             unsafe {
                 // Restore the original instruction at the probe address
-                core::ptr::copy_nonoverlapping(
-                    inst_tmp_ptr as *const u8,
-                    ptr as *mut u8,
-                    EBREAK_INST_LEN,
-                );
+                core::ptr::copy_nonoverlapping(inst_tmp_ptr as *const u8, ptr, EBREAK_INST_LEN);
             }
         });
 
@@ -348,5 +344,5 @@ pub(crate) fn arch_rethook_prepare<L: RawMutex + 'static, F: KprobeAuxiliaryOps 
     // Prepare the kretprobe instance for the rethook
     kretprobe_instance.ret_addr = pt_regs.regs[1];
     kretprobe_instance.frame = 0; // fp
-    pt_regs.regs[1] = arch_rethook_trampoline::<L, F> as _; // Set the return address to the trampoline
+    pt_regs.regs[1] = arch_rethook_trampoline::<L, F> as *const () as _; // Set the return address to the trampoline
 }

@@ -85,12 +85,6 @@ impl RingPage {
             if self.lost > 0 && can_write_lost_record {
                 let new_data_head = self.write_lost(*data_head as usize)?;
                 *data_head = new_data_head as u64;
-                // log::info!(
-                //     "Write lost record: {}, data_tail: {}, new_data_head: {}",
-                //     self.lost,
-                //     *data_tail,
-                //     *data_head
-                // );
                 self.lost = 0;
                 // try to write the event again
                 return self.write_event(data);
@@ -98,22 +92,9 @@ impl RingPage {
             let sample_size = PerfSample::calculate_size(data.len());
             let can_write_sample =
                 self.can_write(sample_size, *data_tail as usize, *data_head as usize);
-            // log::error!(
-            //     "can_write_sample: {}, data_tail: {}, data_head: {}, data.len(): {}, region_size: {}",
-            //     can_write_sample,
-            //     *data_tail,
-            //     *data_head,
-            //     data.len(),
-            //     self.data_region_size
-            // );
             if can_write_sample {
                 let new_data_head = self.write_sample(data, *data_head as usize)?;
                 *data_head = new_data_head as u64;
-                // log::info!(
-                //     "Write sample record, data_tail: {}, new_data_head: {}",
-                //     *data_tail,
-                //     *data_head
-                // );
             } else {
                 self.lost += 1;
             }

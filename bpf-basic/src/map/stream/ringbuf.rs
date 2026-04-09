@@ -115,14 +115,14 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
     /// Create a new RingBuf.
     pub fn new(map_meta: &BpfMapMeta, poll_waker: Arc<dyn PollWaker>) -> Result<&'static mut Self> {
         if !(map_meta.map_flags & !RINGBUF_CREATE_FLAG_MASK).is_empty() {
-            return Err(BpfError::InvalidArgument);
+            return Err(BpfError::EINVAL);
         }
         if map_meta.key_size != 0
             || map_meta.value_size != 0
             || !map_meta.max_entries.is_power_of_two()
             || !is_page_aligned(map_meta.max_entries)
         {
-            return Err(BpfError::InvalidArgument);
+            return Err(BpfError::EINVAL);
         }
 
         let nr_meta_pages = RINGBUF_NR_META_PAGES;
@@ -151,7 +151,7 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
         let mut pages = Vec::with_capacity(nr_pages);
         let mut phys_addrs = vec![0usize; nr_meta_pages + 2 * nr_data_pages];
 
-        log::warn!(
+        log::trace!(
             "Creating ringbuf with {} pages ({} meta pages, {} data pages)",
             nr_pages,
             nr_meta_pages,
@@ -253,7 +253,7 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
     /// Reserve space in the ring buffer for a new record.
     pub(crate) fn reserve(&mut self, size: u64) -> Result<&mut [u8]> {
         if size > RINGBUF_MAX_RECORD_SZ as u64 {
-            return Err(BpfError::InvalidArgument);
+            return Err(BpfError::EINVAL);
         }
 
         let total_size = size + BPF_RINGBUF_HDR_SZ as u64;
@@ -263,7 +263,7 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
         }
 
         if aligned_size > self.total_data_size() {
-            return Err(BpfError::InvalidArgument);
+            return Err(BpfError::EINVAL);
         }
 
         let cons_pos = self.consumer_pos();
@@ -274,7 +274,7 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
         // check for out of ringbuf space by ensuring producer position
         // doesn't advance more than (ringbuf_size - 1) ahead
         if new_prod_pos - cons_pos > self.mask {
-            return Err(BpfError::NoSpace);
+            return Err(BpfError::ENOMEM);
         }
 
         // the prod_idx will automatically wrap around due to masking
@@ -437,7 +437,5 @@ impl<F: KernelAuxiliaryOps> Drop for RingBufMap<F> {
         drop(phys_addrs);
         drop(pages);
         drop(waker);
-
-        log::warn!("RingBufMap dropped");
     }
 }

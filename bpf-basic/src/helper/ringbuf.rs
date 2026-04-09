@@ -39,13 +39,12 @@ pub fn raw_bpf_ringbuf_output<F: KernelAuxiliaryOps>(
     flags: u64,
 ) -> i64 {
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
-        // log::info!("<raw_bpf_ringbuf_output>: flags: {:x?}", flags);
         let data = unsafe { core::slice::from_raw_parts(data, size as usize) };
         bpf_ringbuf_output::<F>(unified_map, data, flags)
     });
     match res {
         Ok(_) => 0,
-        Err(e) => e.into(),
+        Err(e) => e as _,
     }
 }
 
@@ -58,12 +57,12 @@ pub fn bpf_ringbuf_output<F: KernelAuxiliaryOps>(
         .map_mut()
         .as_any_mut()
         .downcast_mut::<RingBufMap<F>>()
-        .ok_or(BpfError::InvalidArgument)?;
-    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::InvalidArgument)?;
+        .ok_or(BpfError::EINVAL)?;
+    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::EINVAL)?;
 
     let data_buf = ringbuf_map
         .reserve(data.len() as u64)
-        .map_err(|_| BpfError::TryAgain)?;
+        .map_err(|_| BpfError::EAGAIN)?;
 
     data_buf.copy_from_slice(data);
 
@@ -82,7 +81,6 @@ pub fn raw_bpf_ringbuf_reserve<F: KernelAuxiliaryOps>(
         return core::ptr::null_mut();
     }
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
-        // log::info!("<raw_bpf_ringbuf_reserve>: {size:x?}");
         bpf_ringbuf_reserve::<F>(unified_map, size)
     });
     match res {
@@ -99,7 +97,7 @@ pub fn bpf_ringbuf_reserve<F: KernelAuxiliaryOps>(
         .map_mut()
         .as_any_mut()
         .downcast_mut::<RingBufMap<F>>()
-        .ok_or(BpfError::InvalidArgument)?;
+        .ok_or(BpfError::EINVAL)?;
     ringbuf_map.reserve(size).map(|buf| buf.as_mut_ptr())
 }
 
@@ -114,12 +112,12 @@ pub fn raw_bpf_ringbuf_submit<F: KernelAuxiliaryOps>(sample: *const u8, flags: u
     let res = bpf_ringbuf_submit::<F>(sample, flags);
     match res {
         Ok(_) => 0,
-        Err(e) => e.into(),
+        Err(e) => e as _,
     }
 }
 
 pub fn bpf_ringbuf_submit<F: KernelAuxiliaryOps>(sample: &[u8], flags: u64) -> Result<()> {
-    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::InvalidArgument)?;
+    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::EINVAL)?;
     RingBuf::<F>::commit(sample, flags, false)
 }
 
@@ -134,13 +132,13 @@ pub fn raw_bpf_ringbuf_discard<F: KernelAuxiliaryOps>(sample: *const u8, flags: 
     let res = bpf_ringbuf_discard::<F>(sample, flags);
     match res {
         Ok(_) => 0,
-        Err(e) => e.into(),
+        Err(e) => e as _,
     }
 }
 
 /// See [raw_bpf_ringbuf_discard]
 pub fn bpf_ringbuf_discard<F: KernelAuxiliaryOps>(sample: &[u8], flags: u64) -> Result<()> {
-    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::InvalidArgument)?;
+    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::EINVAL)?;
     RingBuf::<F>::commit(sample, flags, true)
 }
 
@@ -164,10 +162,7 @@ pub fn raw_bpf_ringbuf_query<F: KernelAuxiliaryOps>(map: *mut c_void, flags: u64
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
         bpf_ringbuf_query::<F>(unified_map, flags)
     });
-    match res {
-        Ok(v) => v,
-        Err(e) => <BpfError as Into<i64>>::into(e) as u64,
-    }
+    res.unwrap_or_default()
 }
 
 pub fn bpf_ringbuf_query<F: KernelAuxiliaryOps>(
@@ -178,7 +173,7 @@ pub fn bpf_ringbuf_query<F: KernelAuxiliaryOps>(
         .map()
         .as_any()
         .downcast_ref::<RingBufMap<F>>()
-        .ok_or(BpfError::InvalidArgument)?;
+        .ok_or(BpfError::EINVAL)?;
 
     match flags {
         BPF_RB_AVAIL_DATA => Ok(ringbuf_map.avail_data_size()),
@@ -212,7 +207,7 @@ pub fn raw_bpf_ringbuf_reserve_dynptr<F: KernelAuxiliaryOps>(
     let bpf_dyn_ptr = unsafe { &mut *bpf_dyn_ptr };
     if flags != 0 {
         bpf_dynptr_set_null(bpf_dyn_ptr);
-        return BpfError::InvalidArgument.into();
+        return BpfError::EINVAL as _;
     }
 
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
@@ -220,7 +215,7 @@ pub fn raw_bpf_ringbuf_reserve_dynptr<F: KernelAuxiliaryOps>(
     });
     match res {
         Ok(_) => 0,
-        Err(e) => e.into(),
+        Err(e) => e as _,
     }
 }
 
@@ -233,20 +228,20 @@ pub fn bpf_ringbuf_reserve_dynptr<F: KernelAuxiliaryOps>(
 
     let Ok(_) = res else {
         bpf_dynptr_set_null(bpf_dyn_ptr);
-        return Err(BpfError::TooBig);
+        return Err(BpfError::EINVAL);
     };
 
     let ringbuf_map = unified_map
         .map_mut()
         .as_any_mut()
         .downcast_mut::<RingBufMap<F>>()
-        .ok_or(BpfError::InvalidArgument)?;
+        .ok_or(BpfError::EINVAL)?;
 
     let data_buf = ringbuf_map.reserve(size as u64);
 
     let Ok(data_buf) = data_buf else {
         bpf_dynptr_set_null(bpf_dyn_ptr);
-        return Err(BpfError::InvalidArgument);
+        return Err(BpfError::EINVAL);
     };
 
     bpf_dyn_ptr.init(data_buf, BpfDynptrType::BPF_DYNPTR_TYPE_RINGBUF, 0, size);
@@ -268,7 +263,7 @@ pub fn raw_bpf_ringbuf_submit_dynptr<F: KernelAuxiliaryOps>(
     let res = bpf_ringbuf_submit_dynptr::<F>(bpf_dyn_ptr, flags);
     match res {
         Ok(_) => 0,
-        Err(e) => e.into(),
+        Err(e) => e as _,
     }
 }
 
@@ -283,7 +278,7 @@ pub fn bpf_ringbuf_submit_dynptr<F: KernelAuxiliaryOps>(
     // we don't care about size here, as the data was reserved before
     let sample = unsafe { core::slice::from_raw_parts(data, 1) };
 
-    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::InvalidArgument)?;
+    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::EINVAL)?;
     RingBuf::<F>::commit(sample, flags, false)?;
 
     bpf_dynptr_set_null(bpf_dyn_ptr);
@@ -304,7 +299,7 @@ pub fn raw_bpf_ringbuf_discard_dynptr<F: KernelAuxiliaryOps>(
     let res = bpf_ringbuf_discard_dynptr::<F>(bpf_dyn_ptr, flags);
     match res {
         Ok(_) => 0,
-        Err(e) => e.into(),
+        Err(e) => e as _,
     }
 }
 
@@ -319,7 +314,7 @@ pub fn bpf_ringbuf_discard_dynptr<F: KernelAuxiliaryOps>(
     // we don't care about size here, as the data was reserved before
     let sample = unsafe { core::slice::from_raw_parts(data, 1) };
 
-    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::InvalidArgument)?;
+    let flags = BpfRingbufFlags::from_bits(flags).ok_or(BpfError::EINVAL)?;
     RingBuf::<F>::commit(sample, flags, true)?;
 
     bpf_dynptr_set_null(bpf_dyn_ptr);

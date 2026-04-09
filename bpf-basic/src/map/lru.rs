@@ -3,7 +3,10 @@ use core::num::NonZero;
 
 use lru::LruCache;
 
-use super::{BpfCallBackFn, BpfMapCommonOps, BpfMapMeta, PerCpuVariants, PerCpuVariantsOps};
+use super::{
+    BpfCallBackFn, BpfMapCommonOps, BpfMapMeta, BpfMapUpdateElemFlags, PerCpuVariants,
+    PerCpuVariantsOps,
+};
 use crate::{BpfError, Result};
 
 type BpfHashMapKey = Vec<u8>;
@@ -17,7 +20,8 @@ type BpfHashMapValue = Vec<u8>;
 /// See <https://docs.ebpf.io/linux/map-type/BPF_MAP_TYPE_LRU_HASH/>
 #[derive(Debug, Clone)]
 pub struct LruMap {
-    _max_entries: u32,
+    key_size: u32,
+    value_size: u32,
     data: LruCache<BpfHashMapKey, BpfHashMapValue>,
 }
 
@@ -25,34 +29,69 @@ impl LruMap {
     /// Create a new [LruMap] with the given value size and maximum number of entries.
     pub fn new(map_meta: &BpfMapMeta) -> Result<Self> {
         if map_meta.value_size == 0 || map_meta.max_entries == 0 || map_meta.key_size == 0 {
-            return Err(BpfError::InvalidArgument);
+            return Err(BpfError::EINVAL);
         }
         Ok(Self {
-            _max_entries: map_meta.max_entries,
+            key_size: map_meta.key_size,
+            value_size: map_meta.value_size,
             data: LruCache::new(NonZero::new(map_meta.max_entries as usize).unwrap()),
         })
+    }
+
+    fn validate_key(&self, key: &[u8]) -> Result<()> {
+        if key.len() != self.key_size as usize {
+            return Err(BpfError::EINVAL);
+        }
+        Ok(())
+    }
+
+    fn validate_value(&self, value: &[u8]) -> Result<()> {
+        if value.len() != self.value_size as usize {
+            return Err(BpfError::EINVAL);
+        }
+        Ok(())
     }
 }
 
 impl BpfMapCommonOps for LruMap {
     fn lookup_elem(&mut self, key: &[u8]) -> Result<Option<&[u8]>> {
+        self.validate_key(key)?;
         let value = self.data.get(key).map(|v| v.as_slice());
         Ok(value)
     }
 
-    fn update_elem(&mut self, key: &[u8], value: &[u8], _flags: u64) -> Result<()> {
+    fn update_elem(&mut self, key: &[u8], value: &[u8], flags: u64) -> Result<()> {
+        self.validate_key(key)?;
+        self.validate_value(value)?;
+        let flags = BpfMapUpdateElemFlags::from_bits(flags).ok_or(BpfError::EINVAL)?;
+        if flags.contains(BpfMapUpdateElemFlags::BPF_F_LOCK) {
+            return Err(BpfError::EINVAL);
+        }
+        if flags.contains(BpfMapUpdateElemFlags::BPF_NOEXIST)
+            && flags.contains(BpfMapUpdateElemFlags::BPF_EXISTS)
+        {
+            return Err(BpfError::EINVAL);
+        }
+        let exists = self.data.contains(key);
+        if flags.contains(BpfMapUpdateElemFlags::BPF_NOEXIST) && exists {
+            return Err(BpfError::EEXIST);
+        }
+        if flags.contains(BpfMapUpdateElemFlags::BPF_EXISTS) && !exists {
+            return Err(BpfError::ENOENT);
+        }
         self.data.put(key.to_vec(), value.to_vec());
         Ok(())
     }
 
     fn delete_elem(&mut self, key: &[u8]) -> Result<()> {
+        self.validate_key(key)?;
         self.data.pop(key);
         Ok(())
     }
 
     fn for_each_elem(&mut self, cb: BpfCallBackFn, ctx: *const u8, flags: u64) -> Result<u32> {
         if flags != 0 {
-            return Err(BpfError::InvalidArgument);
+            return Err(BpfError::EINVAL);
         }
         let mut total_used = 0;
         for (key, value) in self.data.iter() {
@@ -67,38 +106,45 @@ impl BpfMapCommonOps for LruMap {
     }
 
     fn lookup_and_delete_elem(&mut self, key: &[u8], value: &mut [u8]) -> Result<()> {
+        self.validate_key(key)?;
+        self.validate_value(value)?;
         let v = self
             .data
             .get(key)
             .map(|v| v.as_slice())
-            .ok_or(BpfError::NotFound)?;
-        if v.len() > value.len() {
-            return Err(BpfError::InvalidArgument);
-        }
+            .ok_or(BpfError::ENOENT)?;
         value[..v.len()].copy_from_slice(v);
         self.data.pop(key);
         Ok(())
     }
 
     fn get_next_key(&self, key: Option<&[u8]>, next_key: &mut [u8]) -> Result<()> {
-        let mut iter = self.data.iter();
-        if let Some(key) = key {
-            for (k, _) in iter.by_ref() {
-                if k.as_slice() == key {
-                    break;
+        if next_key.len() != self.key_size as usize {
+            return Err(BpfError::EINVAL);
+        }
+        let next = match key {
+            None => self.data.iter().next(),
+            Some(key) => {
+                self.validate_key(key)?;
+                if !self.data.contains(key) {
+                    self.data.iter().next()
+                } else {
+                    let mut iter = self.data.iter();
+                    for (k, _) in iter.by_ref() {
+                        if k.as_slice() == key {
+                            break;
+                        }
+                    }
+                    iter.next()
                 }
             }
-        }
-        let res = iter.next();
-        match res {
+        };
+        match next {
             Some((k, _)) => {
-                if next_key.len() < k.len() {
-                    return Err(BpfError::InvalidArgument);
-                }
-                next_key[..k.len()].copy_from_slice(k);
+                next_key.copy_from_slice(k);
                 Ok(())
             }
-            None => Err(BpfError::NotFound),
+            None => Err(BpfError::ENOENT),
         }
     }
 
@@ -130,7 +176,7 @@ impl<T: PerCpuVariantsOps> PerCpuLruMap<T> {
     /// Create a new [PerCpuLruMap] with the given value size and maximum number of entries.
     pub fn new(map_meta: &BpfMapMeta) -> Result<Self> {
         let array_map = LruMap::new(map_meta)?;
-        let per_cpu_maps = T::create(array_map).ok_or(BpfError::InvalidArgument)?;
+        let per_cpu_maps = T::create(array_map).ok_or(BpfError::EINVAL)?;
         Ok(PerCpuLruMap {
             per_cpu_maps,
             _marker: core::marker::PhantomData,
@@ -205,17 +251,17 @@ mod tests {
     }
 
     fn test_common_lru(lru_map: &mut dyn BpfMapCommonOps) {
-        assert_eq!(lru_map.lookup_elem(&[]), Ok(None));
-        assert_eq!(lru_map.update_elem(b"1", b"first", 0), Ok(()));
-        assert_eq!(lru_map.update_elem(b"2", b"second", 0), Ok(()));
-        assert_eq!(lru_map.update_elem(b"3", b"third", 0), Ok(()));
-        assert_eq!(lru_map.lookup_elem(b"1"), Ok(Some(b"first".as_slice()))); // 2 3 1
-        assert_eq!(lru_map.update_elem(b"4", b"fourth", 0), Ok(())); // 3 1 4
+        assert_eq!(lru_map.lookup_elem(&[]), Err(BpfError::EINVAL));
+        assert_eq!(lru_map.update_elem(b"1", b"val1", 0), Ok(()));
+        assert_eq!(lru_map.update_elem(b"2", b"val2", 0), Ok(()));
+        assert_eq!(lru_map.update_elem(b"3", b"val3", 0), Ok(()));
+        assert_eq!(lru_map.lookup_elem(b"1"), Ok(Some(b"val1".as_slice()))); // 2 3 1
+        assert_eq!(lru_map.update_elem(b"4", b"val4", 0), Ok(())); // 3 1 4
         assert_eq!(lru_map.lookup_elem(b"2"), Ok(None));
 
-        let mut value = [0; 5];
+        let mut value = [0; 4];
         assert_eq!(lru_map.lookup_and_delete_elem(b"1", &mut value), Ok(())); // 3 4
-        assert_eq!(&value, &b"first"[..5]);
+        assert_eq!(&value, b"val1");
         assert_eq!(lru_map.lookup_elem(b"1"), Ok(None));
 
         let mut next_key = [0; 1];
@@ -227,8 +273,10 @@ mod tests {
 
         assert_eq!(
             lru_map.get_next_key(Some(b"3"), &mut next_key),
-            Err(BpfError::NotFound)
+            Err(BpfError::ENOENT)
         ); // 3 4
+        assert_eq!(lru_map.get_next_key(Some(b"9"), &mut next_key), Ok(()));
+        assert_eq!(&next_key, b"4");
 
         let res = lru_map.for_each_elem(callback, null(), 0);
         assert_eq!(res, Ok(2)); // 3 4
@@ -237,18 +285,18 @@ mod tests {
         assert_eq!(res, Ok(1)); // 3 4
 
         let res = lru_map.for_each_elem(callback, null(), 1);
-        assert_eq!(res, Err(BpfError::InvalidArgument));
+        assert_eq!(res, Err(BpfError::EINVAL));
 
-        let mut value = [0; 4];
+        let mut value = [0; 3];
         assert_eq!(
             (lru_map.lookup_and_delete_elem(b"3", &mut value)),
-            Err(BpfError::InvalidArgument)
+            Err(BpfError::EINVAL)
         );
 
         let mut next_key = [0; 0];
         assert_eq!(
             lru_map.get_next_key(Some(b"3"), &mut next_key),
-            Err(BpfError::InvalidArgument)
+            Err(BpfError::EINVAL)
         );
 
         assert_eq!(lru_map.delete_elem(b"1"), Ok(()));
@@ -257,7 +305,7 @@ mod tests {
     #[test]
     fn test_lru_map() {
         let mut meta = BpfMapMeta::default();
-        meta.key_size = 4;
+        meta.key_size = 1;
         meta.value_size = 4;
         meta.max_entries = 3;
         let mut lru_map = LruMap::new(&meta).unwrap();
@@ -267,7 +315,7 @@ mod tests {
     #[test]
     fn test_per_cpu_lru_map() {
         let mut meta = BpfMapMeta::default();
-        meta.key_size = 4;
+        meta.key_size = 1;
         meta.value_size = 4;
         meta.max_entries = 3;
         let mut lru_map = PerCpuLruMap::<DummyPerCpuCreator>::new(&meta).unwrap();
@@ -279,14 +327,14 @@ mod tests {
         let mut meta = BpfMapMeta::default();
         meta.value_size = 0;
         let res = LruMap::new(&meta);
-        assert_eq!(res.err(), Some(BpfError::InvalidArgument));
+        assert_eq!(res.err(), Some(BpfError::EINVAL));
         let res = PerCpuLruMap::<DummyPerCpuCreator>::new(&meta);
-        assert_eq!(res.err(), Some(BpfError::InvalidArgument));
+        assert_eq!(res.err(), Some(BpfError::EINVAL));
 
         meta.key_size = 4;
         meta.value_size = 4;
         meta.max_entries = 3;
         let res = PerCpuLruMap::<DummyPerCpuCreatorFalse>::new(&meta);
-        assert_eq!(res.err(), Some(BpfError::InvalidArgument));
+        assert_eq!(res.err(), Some(BpfError::EINVAL));
     }
 }

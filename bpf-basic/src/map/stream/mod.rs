@@ -68,7 +68,7 @@ const DYNPTR_RDONLY_BIT: u32 = 1 << 31;
 impl BpfDynPtr {
     pub fn check_size(size: u32) -> Result<()> {
         if size > DYNPTR_MAX_SIZE {
-            return Err(BpfError::TooBig);
+            return Err(BpfError::EINVAL);
         }
         Ok(())
     }

@@ -421,5 +421,5 @@ pub(crate) fn arch_rethook_prepare<L: RawMutex + 'static, F: KprobeAuxiliaryOps 
     // Prepare the kretprobe instance for the rethook
     kretprobe_instance.ret_addr = pt_regs.ra;
     kretprobe_instance.frame = pt_regs.s0; // fp
-    pt_regs.ra = arch_rethook_trampoline::<L, F> as _; // Set the return address to the trampoline
+    pt_regs.ra = arch_rethook_trampoline::<L, F> as *const () as _; // Set the return address to the trampoline
 }

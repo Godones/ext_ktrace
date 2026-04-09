@@ -42,3 +42,13 @@ uprobe的运行过程主要分为几个步骤：
 
 
 **由于共享库正常情况下被多个进程共享使用，因此全局插入uprobe探针时，理论上只需要在共享的物理页上修改指令，而对于指定pid插入uprobe探针时，则需要为该进程单独创建一份私有的内存页，并在该页上修改指令。**
+
+## Linux内核的做法
+
+Linux 利用了inode中的反向映射来实现在用户地址空间插入探针。
+
+在指定pid的情况下, 内核首先获取该库的inode，并且使用inode:offset建立一个红黑树（rbtree），用来存储uprobe和该inode的映射关系 [alloc_uprobe](https://elixir.bootlin.com/linux/v6.6/source/kernel/events/uprobes.c#L721)。并且为该进程创建一个私有的内存页（通过copy-on-write机制），然后在该页上插入uprobe探针。
+
+在不指定pid的情况下，内核会在全局范围内插入uprobe探针。它会遍历所有使用该库的进程，并为每个进程创建一个私有的内存页（通过copy-on-write机制），然后在该页上插入uprobe探针。对于稍后加载该库的进程，内核会在加载时检查该库的inode，并且在该进程的内存页上插入uprobe探针。
+
+[linux:uprobe_register](https://elixir.bootlin.com/linux/v6.6/source/kernel/events/uprobes.c#L1189)
