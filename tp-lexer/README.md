@@ -11,7 +11,10 @@
   - `Unknown && True` => `True` (true-neutral)
   - `Unknown || False` => `False` (false-neutral)
   - Top-level `Unknown` => treated as `True` (fail-open to avoid silent data loss).
-- Hex (`0x..`) and decimal integer literals.
+- Signed decimal / hex integer literals such as `-1`, `0x10`, and `-(0x10)`.
+- `u64` / `u128` / `i128` / `isize` / `usize` fields, plus their `NonZero*` variants, are
+  supported, but evaluation still uses an internal `i64`; values outside the `i64` range are
+  truncated with Rust's integer cast semantics before comparison.
 - Compile-time validation: unknown field or type mismatch produces a `ParseError`.
 - Raw buffer evaluation (`BufContext`) using schema offsets; no copying.
 
@@ -99,6 +102,9 @@ Runtime semantics:
 - Missing values => `Unknown` tri-state propagation
 - Top-level `Unknown` => treated as `true` (fail-open)
 - Short-circuit evaluation limits unnecessary field access
+- Wide integer fields (`u64` / `u128` / `i128` / `isize` / `usize`) and their `NonZero*`
+  variants are cast to the engine's internal `i64` representation before comparison, which may
+  truncate high bits or flip sign for out-of-range values
 
 ## Performance Notes
 - Bit masking done after integer fetch; consider pre-masked fields if hot.

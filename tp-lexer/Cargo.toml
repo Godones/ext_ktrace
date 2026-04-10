@@ -1,12 +1,10 @@
 [package]
 name = "tp-lexer"
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
-authors.workspace = true
-keywords.workspace = true
-categories.workspace = true
 license-file.workspace = true
-homepage.workspace = true
-repository.workspace = true
+readme = "README.md"
+description = "A Rust crate for no_std filter expression engine for tracepoint-like events in operating systems."
 
 [dependencies]

@@ -39,9 +39,16 @@ impl<T: Debug + 'static + Send + Sync> ToI64 for IntegerToI64<T> {
                 slice[15],
             ]) as i64
         } else if ty_id == TypeId::of::<isize>() {
-            isize::from_ne_bytes([
-                slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-            ]) as i64
+            #[cfg(target_pointer_width = "64")]
+            {
+                isize::from_ne_bytes([
+                    slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+                ]) as i64
+            }
+            #[cfg(target_pointer_width = "32")]
+            {
+                isize::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]) as i64
+            }
         } else if ty_id == TypeId::of::<u8>() {
             u8::from_ne_bytes([slice[0]]) as i64
         } else if ty_id == TypeId::of::<u16>() {
@@ -59,17 +66,16 @@ impl<T: Debug + 'static + Send + Sync> ToI64 for IntegerToI64<T> {
                 slice[15],
             ]) as i64
         } else if ty_id == TypeId::of::<usize>() {
-            usize::from_ne_bytes([
-                slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-            ]) as i64
-        } else if ty_id == TypeId::of::<f32>() {
-            f32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]) as i64
-        } else if ty_id == TypeId::of::<f64>() {
-            f64::from_ne_bytes([
-                slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-            ]) as i64
-        } else if ty_id == TypeId::of::<()>() {
-            0i64
+            #[cfg(target_pointer_width = "64")]
+            {
+                usize::from_ne_bytes([
+                    slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+                ]) as i64
+            }
+            #[cfg(target_pointer_width = "32")]
+            {
+                usize::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]) as i64
+            }
         } else if ty_id == TypeId::of::<bool>() {
             if slice[0] == 0 { 0i64 } else { 1i64 }
         } else if ty_id == TypeId::of::<char>() {
@@ -113,9 +119,12 @@ impl<T: Debug + 'static + Send + Sync> ToI64 for IntegerToI64<T> {
             }
             v
         } else if ty_id == TypeId::of::<NonZeroIsize>() {
+            #[cfg(target_pointer_width = "64")]
             let v = isize::from_ne_bytes([
                 slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
             ]) as i64;
+            #[cfg(target_pointer_width = "32")]
+            let v = isize::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]) as i64;
             if v == 0 {
                 return Err("NonZeroIsize cannot be zero");
             }
@@ -157,9 +166,12 @@ impl<T: Debug + 'static + Send + Sync> ToI64 for IntegerToI64<T> {
             }
             v
         } else if ty_id == TypeId::of::<NonZeroUsize>() {
+            #[cfg(target_pointer_width = "64")]
             let v = usize::from_ne_bytes([
                 slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
             ]) as i64;
+            #[cfg(target_pointer_width = "32")]
+            let v = usize::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]]) as i64;
             if v == 0 {
                 return Err("NonZeroUsize cannot be zero");
             }
@@ -168,6 +180,10 @@ impl<T: Debug + 'static + Send + Sync> ToI64 for IntegerToI64<T> {
             return Err("unsupported integer type");
         };
         Ok(value)
+    }
+
+    fn byte_len(&self) -> Option<usize> {
+        Some(core::mem::size_of::<T>())
     }
 }
 
@@ -182,8 +198,7 @@ macro_rules! integer {
 integer!(
     i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
 );
-integer!(f32, f64);
-integer!((), bool, char);
+integer!(bool, char);
 integer!(
     NonZeroI8,
     NonZeroI16,
@@ -200,6 +215,16 @@ integer!(
     NonZeroU128,
     NonZeroUsize
 );
+
+macro_rules! unsupported {
+    ($($t:ty),*) => {
+        $(impl FieldClassifier for $t {
+            const FIELD_TYPE: FieldType = FieldType::Unsupported;
+        })*
+    };
+}
+
+unsupported!(f32, f64, ());
 
 impl<T: FieldClassifier> FieldClassifier for [T] {
     const FIELD_TYPE: FieldType = FieldType::Bytes;

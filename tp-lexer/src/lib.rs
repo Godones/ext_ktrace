@@ -7,7 +7,10 @@
 //! - Logical operators with precedence: parentheses > comparison > `&&` > `||` (short‑circuit evaluation).
 //! - Tri‑state runtime: missing field => `Unknown`; top‑level `Unknown` is treated as `true` (fail‑open), `Unknown` is true‑neutral for `&&` and false‑neutral for `||`.
 //! - Compile‑time validation of field existence and type.
-//! - Hex (`0x..`) and decimal integer literals.
+//! - Signed decimal / hex integer literals such as `-1`, `0x10`, and `-(0x10)`.
+//! - `u64` / `u128` / `i128` / `isize` / `usize` fields, plus their `NonZero*` variants, are
+//!   supported, but evaluation still uses an internal `i64`; out-of-range values are truncated
+//!   with Rust's integer cast semantics before comparison.
 //! - no_std + alloc friendly (uses `BTreeMap` in examples; can evaluate directly over a raw byte buffer via `BufContext`).
 //!
 //! Schema & Field Types:
@@ -54,7 +57,9 @@
 //! Limitations / Non‑Goals:
 //! - No arithmetic besides bit masking.
 //! - No unary operators or regex; glob only.
-//! - No implicit widening or casting between integer sizes (user is responsible for consistent layout).
+//! - Evaluation uses an internal `i64` representation. `u64`/`u128`/`i128`/`isize`/`usize`
+//!   fields are accepted, but values outside the `i64` range are truncated using Rust's `as i64`
+//!   integer cast semantics before comparison.
 //! - Evaluation is left‑associative for chains of `&&` / `||` (standard short‑circuit).
 //!
 //! Safety Notes:
@@ -72,7 +77,7 @@ use alloc::{
     format,
     string::{String, ToString},
 };
-use core::fmt::Debug;
+use core::{fmt::Debug, num::IntErrorKind};
 mod internal;
 
 /// A span in the input expression, used for diagnostics.
@@ -97,6 +102,64 @@ impl ParseError {
         Self {
             span: Span { start, end },
             message: msg.into(),
+        }
+    }
+}
+
+fn parse_i64_literal_text(input: &str) -> Result<i64, &'static str> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err("integer value is empty");
+    }
+    let (negative, rest) = match s.as_bytes()[0] {
+        b'-' => (true, &s[1..]),
+        b'+' => (false, &s[1..]),
+        _ => (false, s),
+    };
+    if rest.is_empty() {
+        return Err("integer literal missing digits");
+    }
+    if let Some(hex) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        if hex.is_empty() {
+            return Err("hex literal missing digits");
+        }
+        let value = i64::from_str_radix(hex, 16).map_err(|err| match err.kind() {
+            IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => "integer literal overflow",
+            _ => "invalid integer literal",
+        })?;
+        if negative {
+            value.checked_neg().ok_or("integer literal overflow")
+        } else {
+            Ok(value)
+        }
+    } else {
+        let value = rest.parse::<i64>().map_err(|err| match err.kind() {
+            IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => "integer literal overflow",
+            IntErrorKind::Empty => "integer literal missing digits",
+            _ => "invalid integer literal",
+        })?;
+        if negative {
+            value.checked_neg().ok_or("integer literal overflow")
+        } else {
+            Ok(value)
+        }
+    }
+}
+
+/// An error produced while evaluating a compiled expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalError {
+    /// The field being accessed when the error occurred.
+    pub field: String,
+    /// A human-readable error message.
+    pub message: String,
+}
+
+impl EvalError {
+    fn new<S: Into<String>>(field: &str, message: S) -> Self {
+        Self {
+            field: field.to_string(),
+            message: message.into(),
         }
     }
 }
@@ -504,12 +567,14 @@ enum Expr {
     And(Box<Expr>, Box<Expr>),
     NumCmp {
         field: String,
+        field_span: Span,
         mask: Option<i64>,
         op: NumOp,
         rhs: i64,
     },
     StrCmp {
         field: String,
+        field_span: Span,
         op: StrOp,
         pat: String,
     },
@@ -607,6 +672,7 @@ impl<'a> Parser<'a> {
 
     fn parse_field_cmp(&mut self) -> Result<Expr, ParseError> {
         let name_tok = self.bump()?; // ident
+        let field_span = name_tok.span;
         let field = match name_tok.kind {
             TokenKind::Ident(s) => s,
             _ => unreachable!(),
@@ -615,11 +681,7 @@ impl<'a> Parser<'a> {
         // Case 1: numeric with optional '& INT'
         if matches!(self.lookahead.kind, TokenKind::Amp) {
             self.bump()?; // &
-            let int_tok = self.expect_int()?;
-            let mask_val = match int_tok.kind {
-                TokenKind::Int(v) => v,
-                _ => unreachable!(),
-            };
+            let mask_val = self.parse_signed_int()?;
             let op_tok = self.bump()?; // numeric op
             let op = match op_tok.kind {
                 TokenKind::EqEq => NumOp::Eq,
@@ -636,13 +698,10 @@ impl<'a> Parser<'a> {
                     ));
                 }
             };
-            let int_tok = self.expect_int()?;
-            let rhs = match int_tok.kind {
-                TokenKind::Int(v) => v,
-                _ => unreachable!(),
-            };
+            let rhs = self.parse_signed_int()?;
             return Ok(Expr::NumCmp {
                 field,
+                field_span,
                 mask: Some(mask_val),
                 op,
                 rhs,
@@ -662,13 +721,10 @@ impl<'a> Parser<'a> {
                 TokenKind::Ge => NumOp::Ge,
                 _ => unreachable!(),
             };
-            let int_tok = self.expect_int()?;
-            let rhs = match int_tok.kind {
-                TokenKind::Int(v) => v,
-                _ => unreachable!(),
-            };
+            let rhs = self.parse_signed_int()?;
             return Ok(Expr::NumCmp {
                 field,
+                field_span,
                 mask: None,
                 op,
                 rhs,
@@ -682,6 +738,7 @@ impl<'a> Parser<'a> {
                 let pat = self.parse_pattern_literal()?;
                 Ok(Expr::StrCmp {
                     field,
+                    field_span,
                     op: StrOp::Glob,
                     pat,
                 })
@@ -689,31 +746,33 @@ impl<'a> Parser<'a> {
             TokenKind::EqEq | TokenKind::NotEq => {
                 let op_tok = self.bump()?;
                 // if RHS is INT -> numeric; else -> string literal/pattern
-                match &self.lookahead.kind {
-                    TokenKind::Int(v) => {
-                        let rhs = *v;
-                        self.bump()?; // consume int
-                        let op = match op_tok.kind {
-                            TokenKind::EqEq => NumOp::Eq,
-                            TokenKind::NotEq => NumOp::Ne,
-                            _ => unreachable!(),
-                        };
-                        Ok(Expr::NumCmp {
-                            field,
-                            mask: None,
-                            op,
-                            rhs,
-                        })
-                    }
-                    _ => {
-                        let pat = self.parse_pattern_literal()?;
-                        let op = match op_tok.kind {
-                            TokenKind::EqEq => StrOp::Eq,
-                            TokenKind::NotEq => StrOp::Ne,
-                            _ => unreachable!(),
-                        };
-                        Ok(Expr::StrCmp { field, op, pat })
-                    }
+                if self.starts_numeric_literal() {
+                    let rhs = self.parse_signed_int()?;
+                    let op = match op_tok.kind {
+                        TokenKind::EqEq => NumOp::Eq,
+                        TokenKind::NotEq => NumOp::Ne,
+                        _ => unreachable!(),
+                    };
+                    Ok(Expr::NumCmp {
+                        field,
+                        field_span,
+                        mask: None,
+                        op,
+                        rhs,
+                    })
+                } else {
+                    let pat = self.parse_pattern_literal()?;
+                    let op = match op_tok.kind {
+                        TokenKind::EqEq => StrOp::Eq,
+                        TokenKind::NotEq => StrOp::Ne,
+                        _ => unreachable!(),
+                    };
+                    Ok(Expr::StrCmp {
+                        field,
+                        field_span,
+                        op,
+                        pat,
+                    })
                 }
             }
             _ => Err(ParseError::new(
@@ -755,9 +814,49 @@ impl<'a> Parser<'a> {
         Ok(s)
     }
 
-    fn expect_int(&mut self) -> Result<Token, ParseError> {
-        match self.lookahead.kind {
-            TokenKind::Int(_) => self.bump(),
+    fn starts_numeric_literal(&self) -> bool {
+        match &self.lookahead.kind {
+            TokenKind::Int(_) => true,
+            TokenKind::Bareword(st) => st == "-" || st == "+" || parse_i64_literal_text(st).is_ok(),
+            TokenKind::LParen => true,
+            _ => false,
+        }
+    }
+
+    fn parse_signed_int(&mut self) -> Result<i64, ParseError> {
+        match self.lookahead.kind.clone() {
+            TokenKind::Int(v) => {
+                self.bump()?;
+                Ok(v)
+            }
+            TokenKind::Bareword(st) => {
+                let span = self.lookahead.span;
+                if st == "-" {
+                    self.bump()?;
+                    let value = self.parse_signed_int()?;
+                    value.checked_neg().ok_or_else(|| {
+                        ParseError::new(span.start, span.end, "integer literal overflow")
+                    })
+                } else if st == "+" {
+                    self.bump()?;
+                    self.parse_signed_int()
+                } else {
+                    match parse_i64_literal_text(&st) {
+                        Ok(v) => {
+                            self.bump()?;
+                            Ok(v)
+                        }
+                        Err(message) => Err(ParseError::new(span.start, span.end, message)),
+                    }
+                }
+            }
+            TokenKind::LParen => {
+                let start = self.bump()?.span.start;
+                let value = self.parse_signed_int()?;
+                let end = self.expect(&TokenKind::RParen)?.span.end;
+                let _ = (start, end);
+                Ok(value)
+            }
             _ => Err(ParseError::new(
                 self.lookahead.span.start,
                 self.lookahead.span.end,
@@ -771,6 +870,11 @@ impl<'a> Parser<'a> {
 pub trait ToI64: Send + Sync {
     /// Converts the given byte slice to an i64.
     fn to_i64(&self, bytes: &[u8], offset: usize) -> Result<i64, &'static str>;
+
+    /// Returns the exact byte width expected by this converter when known.
+    fn byte_len(&self) -> Option<usize> {
+        None
+    }
 }
 
 fn to_str_bytes(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], &'static str> {
@@ -882,21 +986,32 @@ macro_rules! schema {
 /// - `BufContext` for zero-copy access over a raw byte buffer + schema
 ///
 /// Custom contexts can implement this trait to bridge existing telemetry/event
-/// representations without copying. Return `None` for missing fields to trigger
-/// the tri-state `Unknown` logic.
+/// representations without copying. Return `Ok(None)` for missing fields to
+/// trigger the tri-state `Unknown` logic, and `Err(EvalError)` for malformed
+/// runtime data.
 pub trait Context {
-    /// Returns an integer value for the given field, or `None` if missing.
-    fn get_integer(&self, name: &str) -> Option<i64>;
-    /// Returns a byte slice value for the given field, or `None` if missing.
-    fn get_str_bytes(&self, name: &str) -> Option<&[u8]>;
+    /// Returns an integer value for the given field, or `Ok(None)` if missing.
+    fn get_integer(&self, name: &str) -> Result<Option<i64>, EvalError>;
+    /// Returns a byte slice value for the given field, or `Ok(None)` if missing.
+    fn get_str_bytes(&self, name: &str) -> Result<Option<&[u8]>, EvalError>;
 }
 
 impl Context for BTreeMap<String, String> {
-    fn get_integer(&self, name: &str) -> Option<i64> {
-        self.get(name).and_then(|s| s.parse::<i64>().ok())
+    fn get_integer(&self, name: &str) -> Result<Option<i64>, EvalError> {
+        match self.get(name) {
+            None => Ok(None),
+            Some(value) => parse_i64_literal_text(value).map(Some).map_err(|message| {
+                let message = if message == "integer literal overflow" {
+                    "integer literal overflow"
+                } else {
+                    "invalid integer literal"
+                };
+                EvalError::new(name, message)
+            }),
+        }
     }
-    fn get_str_bytes(&self, name: &str) -> Option<&[u8]> {
-        self.get(name).map(|s| s.as_bytes())
+    fn get_str_bytes(&self, name: &str) -> Result<Option<&[u8]>, EvalError> {
+        Ok(self.get(name).map(|s| s.as_bytes()))
     }
 }
 
@@ -914,22 +1029,43 @@ impl<'a> BufContext<'a> {
 }
 
 impl<'a> Context for BufContext<'a> {
-    fn get_integer(&self, name: &str) -> Option<i64> {
-        let (field_type, offset, _len) = self.schema.get(name)?;
+    fn get_integer(&self, name: &str) -> Result<Option<i64>, EvalError> {
+        let Some((field_type, offset, len)) = self.schema.get(name) else {
+            return Ok(None);
+        };
         match field_type {
-            FieldType::Integer(to_i64_fn) => to_i64_fn.to_i64(self.buf, offset).ok(),
-            _ => None,
+            FieldType::Integer(to_i64_fn) => {
+                if let Some(expected_len) = to_i64_fn.byte_len()
+                    && len != expected_len
+                {
+                    return Err(EvalError::new(
+                        name,
+                        format!(
+                            "schema length {} does not match integer width {}",
+                            len, expected_len
+                        ),
+                    ));
+                }
+                to_i64_fn
+                    .to_i64(self.buf, offset)
+                    .map(Some)
+                    .map_err(|message| EvalError::new(name, message))
+            }
+            _ => Ok(None),
         }
     }
 
-    fn get_str_bytes(&self, name: &str) -> Option<&[u8]> {
-        let (field_type, offset, len) = self.schema.get(name)?;
+    fn get_str_bytes(&self, name: &str) -> Result<Option<&[u8]>, EvalError> {
+        let Some((field_type, offset, len)) = self.schema.get(name) else {
+            return Ok(None);
+        };
         match field_type {
             FieldType::Bytes => {
-                let bytes = to_str_bytes(self.buf, offset, len).ok()?;
-                Some(bytes)
+                let bytes = to_str_bytes(self.buf, offset, len)
+                    .map_err(|message| EvalError::new(name, message))?;
+                Ok(Some(bytes))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 }
@@ -1072,44 +1208,54 @@ impl Compiled {
     /// Evaluates the expression against the provided context.
     ///
     /// Tri-state semantics: on `Unknown` the top-level result is treated as `true`.
+    ///
+    /// Runtime data errors are treated as `false`. Use [`Self::try_evaluate`] to
+    /// retrieve the underlying [`EvalError`] instead.
     pub fn evaluate<C: Context>(&self, ctx: &C) -> bool {
-        let tri = eval_expr(&self.expr, &self.schema, ctx);
+        self.try_evaluate(ctx).unwrap_or(false)
+    }
+
+    /// Evaluates the expression against the provided context and reports
+    /// runtime data errors instead of collapsing them to `false`.
+    pub fn try_evaluate<C: Context>(&self, ctx: &C) -> Result<bool, EvalError> {
+        let tri = eval_expr(&self.expr, &self.schema, ctx)?;
         match tri {
-            Tri::True => true,
-            Tri::False => false,
-            Tri::Unknown => true, // 顶层 Unknown 视为 true
+            Tri::True => Ok(true),
+            Tri::False => Ok(false),
+            Tri::Unknown => Ok(true), // treat unknown as true at top level
         }
     }
 }
 
-fn eval_expr<C: Context>(e: &Expr, schema: &Schema, ctx: &C) -> Tri {
+fn eval_expr<C: Context>(e: &Expr, schema: &Schema, ctx: &C) -> Result<Tri, EvalError> {
     match e {
         Expr::Group(inner) => eval_expr(inner, schema, ctx),
         Expr::Or(l, r) => {
-            let lv = eval_expr(l, schema, ctx);
+            let lv = eval_expr(l, schema, ctx)?;
             if lv == Tri::True {
-                return Tri::True;
+                return Ok(Tri::True);
             }
-            let rv = eval_expr(r, schema, ctx);
-            lv.or(rv)
+            let rv = eval_expr(r, schema, ctx)?;
+            Ok(lv.or(rv))
         }
         Expr::And(l, r) => {
-            let lv = eval_expr(l, schema, ctx);
+            let lv = eval_expr(l, schema, ctx)?;
             if lv == Tri::False {
-                return Tri::False;
+                return Ok(Tri::False);
             }
-            let rv = eval_expr(r, schema, ctx);
-            lv.and(rv)
+            let rv = eval_expr(r, schema, ctx)?;
+            Ok(lv.and(rv))
         }
         Expr::NumCmp {
             field,
             mask,
             op,
             rhs,
+            ..
         } => {
             match schema.get_type(field) {
-                Some(FieldType::Integer(_)) => match ctx.get_integer(field) {
-                    None => Tri::Unknown,
+                Some(FieldType::Integer(_)) => match ctx.get_integer(field)? {
+                    None => Ok(Tri::Unknown),
                     Some(mut v) => {
                         if let Some(m) = mask {
                             v &= *m;
@@ -1122,31 +1268,31 @@ fn eval_expr<C: Context>(e: &Expr, schema: &Schema, ctx: &C) -> Tri {
                             NumOp::Gt => v > *rhs,
                             NumOp::Ge => v >= *rhs,
                         };
-                        if res { Tri::True } else { Tri::False }
+                        if res { Ok(Tri::True) } else { Ok(Tri::False) }
                     }
                 },
                 // Type mismatch: The expression expects an integer field, but the schema says it's a string.
-                Some(FieldType::Bytes) => Tri::False,
-                Some(FieldType::Unsupported) => Tri::False,
+                Some(FieldType::Bytes) => Ok(Tri::False),
+                Some(FieldType::Unsupported) => Ok(Tri::False),
                 None => unreachable!(),
             }
         }
-        Expr::StrCmp { field, op, pat } => {
+        Expr::StrCmp { field, op, pat, .. } => {
             match schema.get_type(field) {
-                Some(FieldType::Bytes) => match ctx.get_str_bytes(field) {
-                    None => Tri::Unknown,
+                Some(FieldType::Bytes) => match ctx.get_str_bytes(field)? {
+                    None => Ok(Tri::Unknown),
                     Some(v) => {
                         let res = match op {
                             StrOp::Eq => v == pat.as_bytes(),
                             StrOp::Ne => v != pat.as_bytes(),
                             StrOp::Glob => glob_match_bytes(pat.as_bytes(), v),
                         };
-                        if res { Tri::True } else { Tri::False }
+                        if res { Ok(Tri::True) } else { Ok(Tri::False) }
                     }
                 },
                 // Type mismatch: The expression expects a string field, but the schema says it's an integer.
-                Some(FieldType::Integer(_)) => Tri::False,
-                Some(FieldType::Unsupported) => Tri::False,
+                Some(FieldType::Integer(_)) => Ok(Tri::False),
+                Some(FieldType::Unsupported) => Ok(Tri::False),
                 None => unreachable!(),
             }
         }
@@ -1172,31 +1318,58 @@ fn validate(expr: &Expr, schema: &Schema) -> Result<(), ParseError> {
             validate(r, schema)
         }
         Expr::Group(inner) => validate(inner, schema),
-        Expr::NumCmp { field, .. } => match schema.get_type(field) {
-            None => Err(ParseError::new(0, 0, format!("unknown field: {}", field))),
-            Some(FieldType::Bytes) => Err(ParseError::new(
-                0,
-                0,
+        Expr::NumCmp {
+            field, field_span, ..
+        } => match schema.get(field) {
+            None => Err(ParseError::new(
+                field_span.start,
+                field_span.end,
+                format!("unknown field: {}", field),
+            )),
+            Some((FieldType::Bytes, _, _)) => Err(ParseError::new(
+                field_span.start,
+                field_span.end,
                 format!("field '{}' is not numeric", field),
             )),
-            Some(FieldType::Integer(_)) => Ok(()),
-            Some(FieldType::Unsupported) => Err(ParseError::new(
-                0,
-                0,
+            Some((FieldType::Integer(to_i64_fn), _, len)) => {
+                if let Some(expected_len) = to_i64_fn.byte_len()
+                    && len != expected_len
+                {
+                    Err(ParseError::new(
+                        field_span.start,
+                        field_span.end,
+                        format!(
+                            "field '{}' length {} does not match integer width {}",
+                            field, len, expected_len
+                        ),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            Some((FieldType::Unsupported, _, _)) => Err(ParseError::new(
+                field_span.start,
+                field_span.end,
                 format!("field '{}' has unsupported type", field),
             )),
         },
-        Expr::StrCmp { field, .. } => match schema.get_type(field) {
-            None => Err(ParseError::new(0, 0, format!("unknown field: {}", field))),
-            Some(FieldType::Integer(_)) => Err(ParseError::new(
-                0,
-                0,
+        Expr::StrCmp {
+            field, field_span, ..
+        } => match schema.get(field) {
+            None => Err(ParseError::new(
+                field_span.start,
+                field_span.end,
+                format!("unknown field: {}", field),
+            )),
+            Some((FieldType::Integer(_), _, _)) => Err(ParseError::new(
+                field_span.start,
+                field_span.end,
                 format!("field '{}' is not string", field),
             )),
-            Some(FieldType::Bytes) => Ok(()),
-            Some(FieldType::Unsupported) => Err(ParseError::new(
-                0,
-                0,
+            Some((FieldType::Bytes, _, _)) => Ok(()),
+            Some((FieldType::Unsupported, _, _)) => Err(ParseError::new(
+                field_span.start,
+                field_span.end,
                 format!("field '{}' has unsupported type", field),
             )),
         },
@@ -1206,6 +1379,8 @@ fn validate(expr: &Expr, schema: &Schema) -> Result<(), ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::num::{NonZeroI128, NonZeroIsize, NonZeroU64, NonZeroU128, NonZeroUsize};
+
     fn schema_sig_comm_flags_user() -> Schema {
         schema! {
             "sig" => (u32::FIELD_TYPE, 0, 4),
@@ -1249,6 +1424,53 @@ mod tests {
         assert!(compiled.evaluate(&ctx));
         ctx.insert("flags".into(), format!("{}", 0x20));
         assert!(!compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_map_context_accepts_hex_integer_values() {
+        let schema = schema!(
+            "flags" => (u32::FIELD_TYPE, 0, 4),
+        );
+        let compiled = compile_with_schema("flags == 0x20", schema).expect("compile");
+        let mut ctx = BTreeMap::new();
+        ctx.insert("flags".into(), "0x20".into());
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_map_context_invalid_integer_fails_closed() {
+        let schema = schema!(
+            "flags" => (u32::FIELD_TYPE, 0, 4),
+        );
+        let compiled = compile_with_schema("flags == 16", schema).expect("compile");
+        let mut ctx = BTreeMap::new();
+        ctx.insert("flags".into(), "xyz".into());
+        assert!(!compiled.evaluate(&ctx));
+        let err = compiled.try_evaluate(&ctx).unwrap_err();
+        assert_eq!(err.field, "flags");
+        assert!(err.message.contains("invalid integer literal"));
+    }
+
+    #[test]
+    fn test_negative_decimal_literal() {
+        let schema = schema!(
+            "v" => (i64::FIELD_TYPE, 0, 8),
+        );
+        let compiled = compile_with_schema("v == -1", schema).expect("compile");
+        let buf = (-1i64).to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_unary_minus_with_parenthesized_hex_literal() {
+        let schema = schema!(
+            "v" => (i64::FIELD_TYPE, 0, 8),
+        );
+        let compiled = compile_with_schema("v == -(0x10)", schema).expect("compile");
+        let buf = (-16i64).to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
     }
 
     #[test]
@@ -1434,5 +1656,145 @@ mod tests {
         );
         let err = compile_with_schema("sig ~ bash*", schema).unwrap_err();
         assert!(err.message.contains("not string"));
+    }
+
+    #[test]
+    fn test_u64_values_use_i64_cast_semantics() {
+        let schema = schema!(
+            "v" => (u64::FIELD_TYPE, 0, 8),
+        );
+        let compiled = compile_with_schema("v == 42", schema).expect("compile");
+        let buf = 42u64.to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_u128_values_truncate_to_i64() {
+        let schema = schema!(
+            "v" => (u128::FIELD_TYPE, 0, 16),
+        );
+        let compiled = compile_with_schema("v == 7", schema).expect("compile");
+        let buf = ((1u128 << 80) | 7).to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_i128_values_truncate_to_i64() {
+        let schema = schema!(
+            "v" => (i128::FIELD_TYPE, 0, 16),
+        );
+        let compiled = compile_with_schema("v == 5", schema).expect("compile");
+        let buf = ((1i128 << 80) | 5).to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_nonzero_u128_values_truncate_to_i64() {
+        let schema = schema!(
+            "v" => (NonZeroU128::FIELD_TYPE, 0, 16),
+        );
+        let compiled = compile_with_schema("v == 9", schema).expect("compile");
+        let value = NonZeroU128::new((1u128 << 96) | 9).unwrap();
+        let buf = value.get().to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_nonzero_i128_values_truncate_to_i64() {
+        let schema = schema!(
+            "v" => (NonZeroI128::FIELD_TYPE, 0, 16),
+        );
+        let compiled = compile_with_schema("v == 11", schema).expect("compile");
+        let value = NonZeroI128::new((1i128 << 96) | 11).unwrap();
+        let buf = value.get().to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_usize_values_use_i64_cast_semantics() {
+        let schema = schema!(
+            "v" => (usize::FIELD_TYPE, 0, core::mem::size_of::<usize>()),
+        );
+        let expr = format!("v == {}", 42usize as i64);
+        let compiled = compile_with_schema(&expr, schema).expect("compile");
+        let buf = 42usize.to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_nonzero_usize_values_are_supported() {
+        let schema = schema!(
+            "v" => (NonZeroUsize::FIELD_TYPE, 0, core::mem::size_of::<usize>()),
+        );
+        let expr = format!("v == {}", 17usize as i64);
+        let compiled = compile_with_schema(&expr, schema).expect("compile");
+        let value = NonZeroUsize::new(17usize).unwrap();
+        let buf = value.get().to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_isize_values_are_supported() {
+        let schema = schema!(
+            "v" => (isize::FIELD_TYPE, 0, core::mem::size_of::<isize>()),
+        );
+        let expr = format!("v == {}", 42isize as i64);
+        let compiled = compile_with_schema(&expr, schema).expect("compile");
+        let buf = 42isize.to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_nonzero_isize_values_are_supported() {
+        let schema = schema!(
+            "v" => (NonZeroIsize::FIELD_TYPE, 0, core::mem::size_of::<isize>()),
+        );
+        let expr = format!("v == {}", 19isize as i64);
+        let compiled = compile_with_schema(&expr, schema).expect("compile");
+        let value = NonZeroIsize::new(19isize).unwrap();
+        let buf = value.get().to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_nonzero_u64_values_are_supported() {
+        let schema = schema!(
+            "v" => (NonZeroU64::FIELD_TYPE, 0, 8),
+        );
+        let compiled = compile_with_schema("v == 23", schema).expect("compile");
+        let value = NonZeroU64::new(23u64).unwrap();
+        let buf = value.get().to_ne_bytes();
+        let ctx = BufContext::new(&buf, &schema);
+        assert!(compiled.evaluate(&ctx));
+    }
+
+    #[test]
+    fn test_compile_error_unsupported_f32_field() {
+        let schema = schema!(
+            "v" => (f32::FIELD_TYPE, 0, 4),
+        );
+        let err = compile_with_schema("v == 1", schema).unwrap_err();
+        assert!(err.message.contains("unsupported type"));
+    }
+
+    #[test]
+    fn test_compile_error_integer_length_mismatch() {
+        let schema = schema!(
+            "v" => (u32::FIELD_TYPE, 0, 1),
+        );
+        let err = compile_with_schema("v == 1", schema).unwrap_err();
+        assert!(
+            err.message
+                .contains("length 1 does not match integer width 4")
+        );
     }
 }
