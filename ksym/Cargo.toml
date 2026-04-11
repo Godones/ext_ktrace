@@ -7,7 +7,7 @@ license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
 readme = "README.md"
-keywords = ["kernel", "symbol table", "kallsyms"]
+keywords = ["kernel", "symbol-table", "kallsyms"]
 description = "A Rust crate for generating symbol tables for operating systems."
 
 [dependencies]
