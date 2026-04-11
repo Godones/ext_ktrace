@@ -53,7 +53,7 @@ macro_rules! define_event_trace{
         TP_ident($tp_ident:ident),
         TP_printk($fmt_expr: expr)
     ) => {
-        $crate::paste!{
+        $crate::paste::paste!{
             // static_keys::define_static_key_false!([<__ $name _KEY>]);
             static_keys::define_static_key_false_generic!([<__ $name _KEY>], $crate::KernelCodeManipulator<$kops>);
             #[allow(non_upper_case_globals)]
@@ -139,7 +139,7 @@ macro_rules! define_event_trace{
                     [<__ $name>].event_callback_list(&func);
                 }
 
-                let args = [$($crate::AsU64::as_u64($arg)),*];
+                let args = [$($crate::ptr::AsU64::as_u64($arg)),*];
                 let func = |f:&alloc::boxed::Box<dyn $crate::RawTracePointCallBackFunc>|{
                     f.call(&args);
                 };

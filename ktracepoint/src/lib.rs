@@ -13,7 +13,7 @@ extern crate alloc;
 
 mod basic_macro;
 mod point;
-mod ptr;
+pub mod ptr;
 mod trace_pipe;
 
 use alloc::{
@@ -30,12 +30,11 @@ use core::{
 };
 
 use lock_api::{Mutex, MutexGuard, RawMutex};
-pub use paste::paste;
+pub use paste;
 pub use point::{
     CommonTracePointMeta, RawTracePointCallBackFunc, TraceEntry, TracePoint,
     TracePointCallBackFunc, TracePointFunc,
 };
-pub use ptr::AsU64;
 use static_keys::code_manipulate::CodeManipulator;
 pub use tp_lexer;
 use tp_lexer::compile_with_schema;
