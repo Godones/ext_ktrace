@@ -1,4 +1,11 @@
+//! A library to parse and query the Linux kernel symbol table.
+//!! It can initialize the symbol table from the embedded symbols
+//! (when compiled with `assembly` feature) or from a string in the format of
+//! `/proc/kallsyms`.
+//!
+
 #![no_std]
+#![deny(missing_docs)]
 
 use alloc::string::String;
 extern crate alloc;
@@ -8,7 +15,8 @@ pub const TOKEN_MARKER: u8 = 0xFF;
 /// Length bytes for compressed symbol
 pub(crate) const LENGTH_BYTES: usize = 2;
 
-pub const KSYM_NAME_LEN: usize = 1024;
+/// Maximum length for a symbol name
+pub const KSYM_NAME_LEN: usize = 4096;
 /// Length bytes for symbol type
 const TY_LEN: usize = 1;
 
@@ -150,7 +158,7 @@ impl<'a> KallsymsMapped<'a> {
             let name =
                 self.expand_symbol(&self.kallsyms_names[start + PREFIX_LEN..end], &mut name_buf);
             use core::fmt::Write as _;
-            let _ = writeln!(out, "{:016x} {} {}", addr, ty as char, name);
+            let _ = writeln!(out, "{:016x} {} {}", addr, { ty }, name);
         }
         out
     }
@@ -177,19 +185,19 @@ impl<'a> KallsymsMapped<'a> {
                 token_id = Some(id);
                 i += 4;
             }
-            if let Some(id) = token_id {
-                if (id as usize) < self.token_index.len() {
-                    let start = self.token_index[id as usize] as usize;
-                    let end = if (id as usize) + 1 < self.token_index.len() {
-                        self.token_index[(id as usize) + 1] as usize
-                    } else {
-                        self.token_table.len()
-                    };
-                    let token_str = &self.token_table[start..end];
-                    let need_copy = (KSYM_NAME_LEN - offset).min(token_str.len());
-                    name_buf[offset..offset + need_copy].copy_from_slice(&token_str[..need_copy]);
-                    offset += need_copy;
-                }
+            if let Some(id) = token_id
+                && (id as usize) < self.token_index.len()
+            {
+                let start = self.token_index[id as usize] as usize;
+                let end = if (id as usize) + 1 < self.token_index.len() {
+                    self.token_index[(id as usize) + 1] as usize
+                } else {
+                    self.token_table.len()
+                };
+                let token_str = &self.token_table[start..end];
+                let need_copy = (KSYM_NAME_LEN - offset).min(token_str.len());
+                name_buf[offset..offset + need_copy].copy_from_slice(&token_str[..need_copy]);
+                offset += need_copy;
             }
             // Append the rest as raw bytes
             let need_copy = (KSYM_NAME_LEN - offset).min(bytes.len() - i);
@@ -201,8 +209,8 @@ impl<'a> KallsymsMapped<'a> {
             name_buf[offset..offset + need_copy].copy_from_slice(&bytes[i..i + need_copy]);
             offset += need_copy;
         }
-        let name = core::str::from_utf8(&name_buf[..offset]).unwrap_or_default();
-        name
+
+        (core::str::from_utf8(&name_buf[..offset]).unwrap_or_default()) as _
     }
 
     fn read_compressed_len_and_type(bytes: &[u8]) -> (u16, char) {
@@ -211,7 +219,7 @@ impl<'a> KallsymsMapped<'a> {
         }
         // little-endian: lo first, then hi
         // we skip the type byte
-        let len_lo = bytes[0 + TY_LEN] as u16;
+        let len_lo = bytes[TY_LEN] as u16;
         let len_hi = bytes[1 + TY_LEN] as u16;
         ((len_hi << 8) | len_lo, bytes[0] as char)
     }
@@ -304,7 +312,7 @@ impl<'a> KallsymsMapped<'a> {
             let end = start + PREFIX_LEN + len as usize;
             let mid_name =
                 self.expand_symbol(&self.kallsyms_names[start + PREFIX_LEN..end], &mut name_buf);
-            match name.cmp(&mid_name) {
+            match name.cmp(mid_name) {
                 core::cmp::Ordering::Equal => break,
                 core::cmp::Ordering::Less => high = mid - 1,
                 core::cmp::Ordering::Greater => low = mid + 1,
@@ -346,6 +354,6 @@ impl<'a> KallsymsMapped<'a> {
             }
         }
 
-        return Some((low, high));
+        Some((low, high))
     }
 }

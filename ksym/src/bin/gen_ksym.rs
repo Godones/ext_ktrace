@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Debug, io::Write, u64};
+//! A binary to generate compressed kallsyms blob from symbol list input (format: `address type name` per line, e.g. `ffffffff81000000 T _stext`).
+//! The output blob can be directly used in the kernel or for offline analysis.
+//!
+#![deny(missing_docs)]
+
+use std::{collections::HashMap, fmt::Debug, io::Write};
 
 use ksym::TOKEN_MARKER;
 
@@ -14,9 +19,11 @@ const MAX_TOKEN: usize = 512;
 
 /// The structure for compressed symbol data
 pub struct KallsymsBlob {
+    /// The token table storing all tokens as concatenated bytes
     pub token_table: Vec<u8>,
     /// The start index of each token in token_table
     pub token_index: Vec<u32>,
+    /// A map from token string to its ID (index in token_index)
     pub token_map: HashMap<String, u16>,
     /// Compressed symbol data
     pub kallsyms_names: Vec<u8>,
@@ -26,6 +33,7 @@ pub struct KallsymsBlob {
     pub kallsyms_seqs_of_names: Vec<u32>,
     /// The addresses of each symbol
     pub kallsyms_addresses: Vec<u64>,
+    /// The total number of symbols
     pub kallsyms_num_syms: usize,
 }
 
@@ -49,7 +57,14 @@ impl Debug for KallsymsBlob {
     }
 }
 
+impl Default for KallsymsBlob {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KallsymsBlob {
+    /// Create a new empty blob
     pub fn new() -> Self {
         Self {
             token_table: Vec::new(),
@@ -231,7 +246,7 @@ impl KallsymsBlob {
         // offsets [u32]
         pad(&mut blob, 4);
         for &off in &self.kallsyms_offsets {
-            blob.extend_from_slice(&(off as u32).to_le_bytes());
+            blob.extend_from_slice(&off.to_le_bytes());
         }
         // seqs [u32]
         pad(&mut blob, 4);
@@ -268,12 +283,7 @@ fn read_symbol(line: &str) -> Option<(String, u64, char)> {
     let mut parts = line.split_whitespace();
     let vaddr = u64::from_str_radix(parts.next()?, 16).ok()?;
     let symbol_type = parts.next()?.chars().next()?;
-    let mut symbol = parts.collect::<Vec<_>>().join(" ");
-    if symbol.starts_with("_ZN") {
-        symbol = format!("{:#}", rustc_demangle::demangle(&symbol));
-    } else {
-        symbol = format!("{}", symbol);
-    }
+    let symbol = parts.collect::<Vec<_>>().join(" ");
     Some((symbol, vaddr, symbol_type))
 }
 
@@ -303,76 +313,80 @@ fn main() {
     std::io::stdout()
         .write_all(&binary_blob)
         .expect("Failed to write blob");
+    // simple_test();
 }
 
-#[cfg(test)]
-mod tests {
+#[allow(unused)]
+fn simple_test() {
     use ksym::KSYM_NAME_LEN;
 
     use crate::KallsymsBlob;
-    #[test]
-    fn test() {
-        let symbols = r#"
+
+    let symbols = r#"
         0000000000001000 T do_mkdir
         0000000000001300 T alias_do_fork
         0000000000001300 T do_fork
         0000000000001300 T do_fork_2
         0000000000001200 T cpu_startup_entry
         0000000000001400 T cpu_startup_entry
+        0000000000001500 T _ZN6axtask4task9TaskInner4name17h96bec46d2d8f1ab4E
     "#;
-        let symbols: Vec<(String, u64, char)> = symbols
-            .lines()
-            .filter_map(|line| super::read_symbol(line.trim()))
-            .collect();
+    let symbols: Vec<(String, u64, char)> = symbols
+        .lines()
+        .filter_map(|line| read_symbol(line.trim()))
+        .collect();
 
-        println!("Original symbols: {:?}", symbols);
-
-        let mut blob = KallsymsBlob::new();
-        blob.compress_symbols(&symbols);
-
-        let binary_blob = blob.to_blob();
-        println!("Binary blob size: {} bytes", binary_blob.len());
-
-        let mapped =
-            ksym::KallsymsMapped::from_blob(&binary_blob, 0x1000, 0x1500).expect("parse blob");
-
-        assert_eq!(mapped.lookup_address(100, &mut [0; KSYM_NAME_LEN]), None);
-        assert_eq!(
-            mapped.lookup_address(0x1200, &mut [0; KSYM_NAME_LEN]),
-            Some(("cpu_startup_entry", 0x100, 0, 'T'))
-        );
-        // Test aliased symbols
-        assert_eq!(
-            mapped.lookup_address(0x1300, &mut [0; KSYM_NAME_LEN]),
-            Some(("alias_do_fork", 0x100, 0, 'T'))
-        );
-        assert_eq!(
-            mapped.lookup_address(0x1250, &mut [0; KSYM_NAME_LEN]),
-            Some(("cpu_startup_entry", 0x100, 0x50, 'T'))
-        );
-        assert_eq!(
-            mapped.lookup_address(0x1450, &mut [0; KSYM_NAME_LEN]),
-            Some(("cpu_startup_entry", 0x100, 0x50, 'T'))
-        );
-        assert_eq!(
-            mapped.lookup_name("cpu_startup_entry"),
-            Some(0x1200),
-            "The address of cpu_startup_entry should be 0x1200 instead of 0x1400"
-        );
-        assert_eq!(mapped.lookup_name("do_fork_2"), Some(0x1300));
-
-        println!("All tests passed.");
-        let dumped = mapped.dump_all_symbols();
-        println!("Dumped all symbols:\n{}", dumped);
+    println!("Original symbols:");
+    for (sym, addr, ty) in &symbols {
+        println!("{:016x} {} {}", addr, ty, sym);
     }
 
-    fn trans<'b>(buf: &'b mut [u8; 10]) -> &'b str {
-        buf.copy_from_slice(b"abcdabcdab");
-        std::str::from_utf8(buf).unwrap()
-    }
+    let mut blob = KallsymsBlob::new();
+    blob.compress_symbols(&symbols);
+
+    let binary_blob = blob.to_blob();
+    println!("Binary blob size: {} bytes", binary_blob.len());
+
+    let mapped = ksym::KallsymsMapped::from_blob(&binary_blob, 0x1000, 0x1600).expect("parse blob");
+
+    assert_eq!(mapped.lookup_address(100, &mut [0; KSYM_NAME_LEN]), None);
+    assert_eq!(
+        mapped.lookup_address(0x1200, &mut [0; KSYM_NAME_LEN]),
+        Some(("cpu_startup_entry", 0x100, 0, 'T'))
+    );
+    // Test aliased symbols
+    assert_eq!(
+        mapped.lookup_address(0x1300, &mut [0; KSYM_NAME_LEN]),
+        Some(("alias_do_fork", 0x100, 0, 'T'))
+    );
+    assert_eq!(
+        mapped.lookup_address(0x1250, &mut [0; KSYM_NAME_LEN]),
+        Some(("cpu_startup_entry", 0x100, 0x50, 'T'))
+    );
+    assert_eq!(
+        mapped.lookup_address(0x1450, &mut [0; KSYM_NAME_LEN]),
+        Some(("cpu_startup_entry", 0x100, 0x50, 'T'))
+    );
+    assert_eq!(
+        mapped.lookup_name("cpu_startup_entry"),
+        Some(0x1200),
+        "The address of cpu_startup_entry should be 0x1200 instead of 0x1400"
+    );
+    assert_eq!(mapped.lookup_name("do_fork_2"), Some(0x1300));
+
+    assert_eq!(
+        mapped.lookup_name("_ZN6axtask4task9TaskInner4name17h96bec46d2d8f1ab4E"),
+        Some(0x1500)
+    );
+    println!("All tests passed.");
+    let dumped = mapped.dump_all_symbols();
+    println!("Dumped all symbols:\n{}", dumped);
+}
+
+#[cfg(test)]
+mod tests {
     #[test]
-    fn k() {
-        let mut buf = [0u8; 10];
-        assert_eq!(trans(&mut buf), "abcdabcdab");
+    fn test() {
+        super::simple_test();
     }
 }
