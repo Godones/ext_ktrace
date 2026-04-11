@@ -15,7 +15,7 @@ static-keys = "0.8"
 paste = "1.0"
 log = "0.4"
 lock_api = "0.4"
-tp-lexer = { path = "../tp-lexer" }
+tp-lexer.workspace = true
 
 [dev-dependencies]
 spin = "0.10"
