@@ -6,6 +6,7 @@ authors.workspace = true
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/tp-lexer"
 readme = "README.md"
 keywords = ["tracepoint", "filter-expression", "lexer", "no-std"]
 description = "A Rust crate for no_std filter expression engine for tracepoint-like events in operating systems."

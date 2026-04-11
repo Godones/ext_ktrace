@@ -6,6 +6,7 @@ authors.workspace = true
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kprobe"
 readme = "README.md"
 keywords = ["kprobe", "uprobe", "kernel", "tracing", "no-std"]
 description = "A no_std Rust probe infrastructure crate for kprobe, kretprobe, and uprobe on multiple architectures."

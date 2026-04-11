@@ -6,6 +6,7 @@ authors.workspace = true
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kbpf-basic"
 readme = "README.md"
 keywords = ["bpf", "ebpf", "kernel", "tracing", "no-std"]
 description = "A no_std Rust eBPF foundation library for kernel or kernel-like environments."

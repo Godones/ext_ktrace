@@ -6,6 +6,7 @@ authors.workspace = true
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/ksym"
 readme = "README.md"
 keywords = ["kernel", "symbol-table", "kallsyms"]
 description = "A Rust crate for generating symbol tables for operating systems."

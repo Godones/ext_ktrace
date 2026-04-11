@@ -168,9 +168,9 @@ pub fn map_lookup_elem(unified_map: &mut UnifiedMap, key: &[u8]) -> Result<Optio
     }
 }
 
-/// See https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_perf_event_output/
+/// See <https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_perf_event_output/>
 ///
-/// See https://man7.org/linux/man-pages/man7/bpf-helpers.7.html
+/// See <https://man7.org/linux/man-pages/man7/bpf-helpers.7.html>
 pub fn raw_perf_event_output<F: KernelAuxiliaryOps>(
     ctx: *mut c_void,
     map: *mut c_void,
@@ -341,7 +341,7 @@ pub fn map_for_each_elem(
 
 /// Perform a lookup in percpu map for an entry associated to key on cpu.
 ///
-/// See https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_lookup_percpu_elem/
+/// See <https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_lookup_percpu_elem/>
 pub fn raw_map_lookup_percpu_elem<F: KernelAuxiliaryOps>(
     map: *mut c_void,
     key: *const c_void,
@@ -374,7 +374,7 @@ pub fn map_lookup_percpu_elem(
 }
 /// Push an element value in map.
 ///
-/// See https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_push_elem/
+/// See <https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_push_elem/>
 pub fn raw_map_push_elem<F: KernelAuxiliaryOps>(
     map: *mut c_void,
     value: *const c_void,
@@ -401,7 +401,7 @@ pub fn map_push_elem(unified_map: &mut UnifiedMap, value: &[u8], flags: u64) -> 
 
 /// Pop an element from map.
 ///
-/// See https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_pop_elem/
+/// See <https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_pop_elem/>
 pub fn raw_map_pop_elem<F: KernelAuxiliaryOps>(map: *mut c_void, value: *mut c_void) -> i64 {
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
         let meta = unified_map.map_meta();
@@ -424,7 +424,7 @@ pub fn map_pop_elem(unified_map: &mut UnifiedMap, value: &mut [u8]) -> Result<()
 
 /// Get an element from map without removing it.
 ///
-/// See https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_peek_elem/
+/// See <https://ebpf-docs.dylanreimerink.nl/linux/helper-function/bpf_map_peek_elem/>
 pub fn raw_map_peek_elem<F: KernelAuxiliaryOps>(map: *mut c_void, value: *mut c_void) -> i64 {
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
         let meta = unified_map.map_meta();

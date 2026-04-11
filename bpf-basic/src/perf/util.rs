@@ -17,7 +17,7 @@ bitflags! {
 
 /// The `PerfEventIoc` enum is used to define the ioctl commands for perf events.
 ///
-/// See https://elixir.bootlin.com/linux/v6.1/source/include/uapi/linux/perf_event.h#L544
+/// See <https://elixir.bootlin.com/linux/v6.1/source/include/uapi/linux/perf_event.h#L544>
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, IntEnum)]
 pub enum PerfEventIoc {
