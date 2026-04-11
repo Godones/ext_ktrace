@@ -1,22 +1,11 @@
 [workspace]
-members = [
-    "bpf-basic",
-    "kprobe",
-    "ktracepoint",
-    "ksym",
-    "unikernel/*",
-    "tp-lexer",
-]
+members = ["bpf-basic", "kprobe", "ktracepoint", "ksym", "tp-lexer"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["Linfeng Chen <chenlinfeng25@outlook.com>"]
+authors = ["Godones <chenlinfeng25@outlook.com>"]
 license-file = "LICENSE"
 homepage = "https://github.com/Godones/ext_ktrace"
 repository = "https://github.com/Godones/ext_ktrace"
-
-[workspace.dependencies]
-aya-obj = { git = "https://github.com/Godones/aya.git", branch = "dev" }
-aya = { git = "https://github.com/Godones/aya.git", branch = "dev", default-features = false }
