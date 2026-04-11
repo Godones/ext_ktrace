@@ -1378,8 +1378,9 @@ fn validate(expr: &Expr, schema: &Schema) -> Result<(), ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::num::{NonZeroI128, NonZeroIsize, NonZeroU64, NonZeroU128, NonZeroUsize};
+
+    use super::*;
 
     fn schema_sig_comm_flags_user() -> Schema {
         schema! {

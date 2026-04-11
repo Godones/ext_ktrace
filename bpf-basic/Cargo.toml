@@ -1,7 +1,14 @@
 [package]
 name = "kbpf-basic"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["bpf", "ebpf", "kernel", "tracing", "no-std"]
+description = "A no_std Rust eBPF foundation library for kernel or kernel-like environments."
 
 [dependencies]
 printf-compat = "0.3"

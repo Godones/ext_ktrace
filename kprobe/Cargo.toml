@@ -1,12 +1,14 @@
 [package]
 name = "kprobe"
-authors.workspace = true
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license-file.workspace = true
-description = "A no_std Rust probe infrastructure crate for kprobe, kretprobe, and uprobe on multiple architectures."
+homepage.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["kprobe", "uprobe", "kernel", "tracing", "no-std"]
+description = "A no_std Rust probe infrastructure crate for kprobe, kretprobe, and uprobe on multiple architectures."
 
 [dependencies]
 log = "0.4"
