@@ -7,7 +7,7 @@ use super::{
     BpfCallBackFn, BpfMapCommonOps, BpfMapMeta, BpfMapUpdateElemFlags, PerCpuVariants,
     PerCpuVariantsOps,
 };
-use crate::{BpfError, Result};
+use crate::{BpfError, BpfResult as Result};
 
 type BpfHashMapKey = Vec<u8>;
 type BpfHashMapValue = Vec<u8>;

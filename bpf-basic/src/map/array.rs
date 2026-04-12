@@ -3,9 +3,9 @@ use core::ops::{Index, IndexMut, Range};
 
 use super::{
     BpfCallBackFn, BpfMapCommonOps, BpfMapMeta, BpfMapUpdateElemFlags, PerCpuVariants,
-    PerCpuVariantsOps, round_up,
+    PerCpuVariantsOps,
 };
-use crate::{BpfError, Result};
+use crate::{BpfError, BpfResult as Result};
 
 /// The array map type is a generic map type with no restrictions on the structure of the value.
 /// Like a normal array, the array map has a numeric key starting at 0 and incrementing.
@@ -54,8 +54,7 @@ impl ArrayMap {
         if map_meta.value_size == 0 || map_meta.max_entries == 0 || map_meta.key_size != 4 {
             return Err(BpfError::EINVAL);
         }
-        let elem_size = round_up(map_meta.value_size as usize, 8);
-        let data = ArrayMapData::new(elem_size as u32, map_meta.max_entries);
+        let data = ArrayMapData::new(map_meta.value_size, map_meta.max_entries);
         Ok(ArrayMap {
             data,
             value_size: map_meta.value_size,

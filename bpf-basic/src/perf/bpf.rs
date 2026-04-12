@@ -1,9 +1,8 @@
 //! BPF performance event handling module.
 //!
-use core::any::Any;
 
 use super::util::{PerfProbeArgs, *};
-use crate::{BpfError, Result, linux_bpf::*};
+use crate::{BpfResult as Result, linux_bpf::*};
 
 const PAGE_SIZE: usize = 4096;
 
@@ -233,7 +232,7 @@ impl BpfPerfEvent {
     /// Only when the perf event is enabled, the event will be written.
     pub fn write_event(&mut self, data: &[u8]) -> Result<()> {
         if self.data.enabled {
-            self.data.mmap_page.write_event(data);
+            self.data.mmap_page.write_event(data)?;
         }
         Ok(())
     }

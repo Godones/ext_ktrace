@@ -7,7 +7,7 @@ use alloc::{
 use core::{ffi::CStr, fmt::Debug};
 
 use crate::{
-    BpfError, KernelAuxiliaryOps, Result,
+    BpfError, BpfResult as Result, KernelAuxiliaryOps,
     linux_bpf::{bpf_attach_type, bpf_attr, bpf_prog_type},
 };
 

@@ -16,16 +16,10 @@ use alloc::{
 use core::{any::Any, ffi::CStr, fmt::Debug, ops::Range};
 
 use crate::{
-    BpfError, KernelAuxiliaryOps, PollWaker, Result,
+    BpfError, BpfResult as Result, KernelAuxiliaryOps, PollWaker,
     linux_bpf::{BpfMapType, bpf_attr},
     map::flags::BpfMapCreateFlags,
 };
-
-#[inline]
-/// Round up `x` to the nearest multiple of `align`.
-fn round_up(x: usize, align: usize) -> usize {
-    (x + align - 1) & !(align - 1)
-}
 
 /// Callback function type for iterating over map elements.
 pub type BpfCallBackFn = fn(key: &[u8], value: &[u8], ctx: *const u8) -> i32;
@@ -107,7 +101,13 @@ pub trait BpfMapCommonOps: Send + Sync + Debug + Any {
     fn map_mem_usage(&self) -> Result<usize>;
 
     /// Memory map the map into user space. Return the physical address.
-    fn map_mmap(&self, offset: usize, size: usize, read: bool, write: bool) -> Result<Vec<usize>> {
+    fn map_mmap(
+        &self,
+        _offset: usize,
+        _size: usize,
+        _read: bool,
+        _write: bool,
+    ) -> Result<Vec<usize>> {
         Err(BpfError::EPERM)
     }
 

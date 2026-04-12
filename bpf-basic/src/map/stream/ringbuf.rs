@@ -4,16 +4,14 @@
 //! See <https://docs.ebpf.io/linux/map-type/BPF_MAP_TYPE_RINGBUF/>
 use alloc::{sync::Arc, vec, vec::Vec};
 use core::{
-    arch,
     fmt::Debug,
     mem::offset_of,
     ops::{Deref, DerefMut},
-    ptr::NonNull,
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 use crate::{
-    BpfError, KernelAuxiliaryOps, PollWaker, Result,
+    BpfError, BpfResult as Result, KernelAuxiliaryOps, PollWaker,
     helper::ringbuf::BpfRingbufFlags,
     map::{BpfMapCommonOps, BpfMapMeta, flags::BpfMapCreateFlags, stream::InnerPage},
 };
@@ -267,7 +265,7 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
         }
 
         let cons_pos = self.consumer_pos();
-        let mut prod_pos = self.producer_pos();
+        let prod_pos = self.producer_pos();
 
         let new_prod_pos = prod_pos + aligned_size;
 
@@ -384,7 +382,13 @@ impl<F: KernelAuxiliaryOps> BpfMapCommonOps for RingBufMap<F> {
         self
     }
 
-    fn map_mmap(&self, offset: usize, size: usize, read: bool, write: bool) -> Result<Vec<usize>> {
+    fn map_mmap(
+        &self,
+        offset: usize,
+        size: usize,
+        _read: bool,
+        _write: bool,
+    ) -> Result<Vec<usize>> {
         let offset = offset + (RINGBUF_PGOFF << PAGE_SHIFT);
         let page_idx = offset >> PAGE_SHIFT;
         let range = size >> PAGE_SHIFT;

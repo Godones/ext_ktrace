@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use super::{BpfMapCommonOps, BpfMapMeta, BpfMapUpdateElemFlags};
-use crate::{BpfError, Result};
+use crate::{BpfError, BpfResult as Result};
 
 type BpfQueueValue = Vec<u8>;
 

@@ -1,7 +1,7 @@
 //! Arguments for attaching BPF raw tracepoint programs.
 use alloc::string::String;
 
-use crate::{BpfError, KernelAuxiliaryOps, Result, linux_bpf::*};
+use crate::{BpfResult as Result, KernelAuxiliaryOps, linux_bpf::*};
 
 /// Arguments for attaching a BPF raw tracepoint program.
 #[derive(Debug)]

@@ -12,10 +12,9 @@ keywords = ["bpf", "ebpf", "kernel", "tracing", "no-std"]
 description = "A no_std Rust eBPF foundation library for kernel or kernel-like environments."
 
 [dependencies]
-printf-compat = "0.3"
+printf-compat = { version = "0.3", default-features = false }
 bitflags = "2"
-lru = "0.16.3"
+lru = "0.16"
 log = "0.4"
-rbpf = "0.4"
 int-enum = "1.2"
 axerrno = "0.2"

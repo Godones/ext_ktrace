@@ -1,13 +1,9 @@
-use alloc::{collections::btree_map::BTreeMap, fmt, string::String, vec::Vec};
-use core::{
-    ffi::{c_char, c_int, c_void},
-    fmt::Write,
-};
+use core::ffi::c_void;
 
 use crate::{
-    BpfError, KernelAuxiliaryOps, PollWaker, Result,
+    BpfError, BpfResult as Result, KernelAuxiliaryOps,
     map::{
-        BpfCallBackFn, UnifiedMap,
+        UnifiedMap,
         stream::{BpfDynPtr, BpfDynptrType, RingBufMap, ringbuf::RingBuf},
     },
 };

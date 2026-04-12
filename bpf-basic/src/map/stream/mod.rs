@@ -1,7 +1,7 @@
 pub(crate) mod ringbuf;
 pub use ringbuf::RingBufMap;
 
-use crate::{BpfError, KernelAuxiliaryOps, Result};
+use crate::{BpfError, BpfResult as Result, KernelAuxiliaryOps};
 
 #[derive(Debug)]
 struct InnerPage<F: KernelAuxiliaryOps> {
@@ -16,13 +16,6 @@ impl<F: KernelAuxiliaryOps> InnerPage<F> {
             addr,
             _phantom: core::marker::PhantomData,
         })
-    }
-
-    pub fn from_addr(addr: usize) -> Self {
-        InnerPage {
-            addr,
-            _phantom: core::marker::PhantomData,
-        }
     }
 
     pub fn phys_addr(&self) -> usize {
