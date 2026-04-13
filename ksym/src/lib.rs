@@ -314,7 +314,12 @@ impl<'a> KallsymsMapped<'a> {
                 self.expand_symbol(&self.kallsyms_names[start + PREFIX_LEN..end], &mut name_buf);
             match name.cmp(mid_name) {
                 core::cmp::Ordering::Equal => break,
-                core::cmp::Ordering::Less => high = mid - 1,
+                core::cmp::Ordering::Less => {
+                    if mid == 0 {
+                        return None;
+                    }
+                    high = mid - 1;
+                }
                 core::cmp::Ordering::Greater => low = mid + 1,
             }
         }

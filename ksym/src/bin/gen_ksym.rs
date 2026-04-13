@@ -330,6 +330,7 @@ fn simple_test() {
         0000000000001200 T cpu_startup_entry
         0000000000001400 T cpu_startup_entry
         0000000000001500 T _ZN6axtask4task9TaskInner4name17h96bec46d2d8f1ab4E
+        0000000000001510 T _RNvXs6_NtNtCskdqSPfBY5oR_10kbpf_basic3map5arrayNtB5_17PerfEventArrayMapNtB7_15BpfMapCommonOps13for_each_elem
     "#;
     let symbols: Vec<(String, u64, char)> = symbols
         .lines()
@@ -378,6 +379,9 @@ fn simple_test() {
         mapped.lookup_name("_ZN6axtask4task9TaskInner4name17h96bec46d2d8f1ab4E"),
         Some(0x1500)
     );
+    let addr = mapped.lookup_name("_RNvXs6_NtNtCsk9UQNouxT1Z_10kbpf_basic3map5arrayNtB5_17PerfEventArrayMapNtB7_15BpfMapCommonOps13for_each_elem");
+    assert_eq!(addr, None);
+
     println!("All tests passed.");
     let dumped = mapped.dump_all_symbols();
     println!("Dumped all symbols:\n{}", dumped);
