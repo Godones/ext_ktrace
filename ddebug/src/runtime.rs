@@ -9,10 +9,11 @@ use core::{
 use static_keys::{RawStaticFalseKey, code_manipulate::CodeManipulator};
 
 pub(crate) const FLAG_PRINT: u8 = 1 << 0;
-pub(crate) const FLAG_MODULE: u8 = 1 << 1;
-pub(crate) const FLAG_FILE: u8 = 1 << 2;
-pub(crate) const FLAG_LINE: u8 = 1 << 3;
-pub(crate) const FLAG_THREAD: u8 = 1 << 4;
+pub(crate) const FLAG_THREAD: u8 = 1 << 1;
+pub(crate) const FLAG_MODULE: u8 = 1 << 2;
+pub(crate) const FLAG_FUNC: u8 = 1 << 3;
+pub(crate) const FLAG_SOURCE: u8 = 1 << 4;
+pub(crate) const FLAG_LINE: u8 = 1 << 5;
 
 /// Backend operations used by dynamic debug callsites.
 pub trait DebugOps: Send + Sync + 'static {
@@ -191,10 +192,11 @@ pub(crate) fn scan_debug_sites<K: DebugOps>() -> Vec<&'static DebugSite<K>> {
 pub(crate) fn flag_mask_for(chr: char) -> Option<u8> {
     Some(match chr {
         'p' => FLAG_PRINT,
-        'm' => FLAG_MODULE,
-        'f' => FLAG_FILE,
-        'l' => FLAG_LINE,
         't' => FLAG_THREAD,
+        'm' => FLAG_MODULE,
+        'f' => FLAG_FUNC,
+        's' => FLAG_SOURCE,
+        'l' => FLAG_LINE,
         _ => return None,
     })
 }
@@ -206,7 +208,10 @@ fn append_prefix<K: DebugOps>(out: &mut String, site: &DebugSite<K>, flags: u8) 
     if flags & FLAG_MODULE != 0 {
         let _ = write!(out, "[{}] ", site.module());
     }
-    if flags & FLAG_FILE != 0 {
+    if flags & FLAG_FUNC != 0 && !site.function().is_empty() {
+        let _ = write!(out, "{} ", site.function());
+    }
+    if flags & FLAG_SOURCE != 0 {
         out.push_str(site.file());
         if flags & FLAG_LINE != 0 {
             let _ = write!(out, ":{}", site.line());
@@ -221,10 +226,11 @@ fn flags_to_string(flags: u8) -> String {
     let mut out = String::from("=");
     for (bit, chr) in [
         (FLAG_PRINT, 'p'),
-        (FLAG_MODULE, 'm'),
-        (FLAG_FILE, 'f'),
-        (FLAG_LINE, 'l'),
         (FLAG_THREAD, 't'),
+        (FLAG_MODULE, 'm'),
+        (FLAG_FUNC, 'f'),
+        (FLAG_SOURCE, 's'),
+        (FLAG_LINE, 'l'),
     ] {
         if flags & bit != 0 {
             out.push(chr);

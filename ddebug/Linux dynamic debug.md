@@ -27,7 +27,18 @@ Dynamic debug 本质上是把内核里的 pr_debug() / dev_dbg() 这类调试点
 
 一句话概括：Dynamic debug 是“编译期埋点 + 链接期收集 + 启动期建表 + 运行时匹配改标志 + 执行时快速分支”的一套内核日志动态开关机制。
 
-说明：你给的 Bootlin 链接在当前抓取环境里打不开，我用同内容的源码镜像核对了 v6.6 的 dynamic_debug.h，并补看了 lib/dynamic_debug.c 来确认实现细节。
+
+Flags 说明：
+- p    enables the pr_debug() callsite.
+- _    enables no flags.
+
+Decorator flags add to the message-prefix, in order:
+- t    Include thread ID, or \<intr\> if in interrupt context
+- m    Include module name
+- f    Include the function name
+- s    Include the source file name
+- l    Include line number
+- d    Include call trace
 
 参考：
 

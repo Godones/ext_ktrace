@@ -119,8 +119,9 @@ fn demo_debug(value: u32) {
     pr_debug!(TestOps, "demo value={}", value);
 }
 
+#[crate::named]
 fn prefix_debug(value: u32) {
-    pr_debug!(TestOps, "prefix value={}", value);
+    pr_debug_fn!(TestOps, "prefix value={}", value);
 }
 
 fn line_debug() -> u32 {
@@ -138,7 +139,7 @@ fn function_debug(value: u32) {
 fn parser_handles_quotes_and_flags() {
     let _guard = TEST_LOCK.lock().unwrap();
     let commands = parse_commands_for_tests(
-        "file src/tests.rs func function_debug line 10-12 format \"alloc page\" +p; module ddebug::tests =pmft",
+        "file src/tests.rs func function_debug line 10-12 format \"alloc page\" +p; module ddebug::tests =ptmfsl",
     )
     .unwrap();
     assert_eq!(commands.len(), 2);
@@ -182,7 +183,7 @@ fn selectors_and_prefix_flags_work() {
     assert!(take_output().is_empty());
 
     let query = format!(
-        "module ddebug::tests file src/tests.rs line {} format \"line filtered\" =pmflt",
+        "module ddebug::tests file src/tests.rs line {} format \"line filtered\" =ptmsl",
         line
     );
     let matches = ctl.write(&query).unwrap();
@@ -190,14 +191,15 @@ fn selectors_and_prefix_flags_work() {
 
     let listing = ctl.read().unwrap();
     assert!(listing.contains("line filtered"));
-    assert!(listing.contains("=pmflt"));
+    assert!(listing.contains("=ptmsl"));
 
-    ctl.write("format \"prefix value=\" =pmflt").unwrap();
+    ctl.write("format \"prefix value=\" =ptmfsl").unwrap();
     prefix_debug(11);
     let lines = take_output();
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains("tid=4242"));
     assert!(lines[0].contains("[ddebug::tests]"));
+    assert!(lines[0].contains("prefix_debug"));
     assert!(lines[0].contains("src/tests.rs"));
     assert!(lines[0].contains("prefix value=11"));
 }
@@ -215,4 +217,62 @@ fn func_selector_matches_named_callsites() {
 
     let listing = ctl.read().unwrap();
     assert!(listing.contains("[ddebug::tests]function_debug =p"));
+}
+
+#[test]
+fn wildcard_func_selector_matches_only_named_sites() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let mut ctl = init_for_tests();
+
+    let matches = ctl.write("func *debug +p").unwrap();
+    assert!(matches >= 2);
+
+    demo_debug(1);
+    prefix_debug(2);
+    function_debug(3);
+
+    let lines = take_output();
+    assert_eq!(lines.len(), 2);
+    assert!(lines.iter().any(|line| line.contains("prefix value=2")));
+    assert!(lines.iter().any(|line| line.contains("func filtered value=3")));
+    assert!(!lines.iter().any(|line| line.contains("demo value=1")));
+}
+
+#[test]
+fn wildcard_file_and_format_selectors_work_together() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let mut ctl = init_for_tests();
+
+    let matches = ctl
+        .write("file *src/tests.rs format \"demo value=*\" +p")
+        .unwrap();
+    assert!(matches >= 1);
+
+    demo_debug(7);
+    prefix_debug(8);
+
+    let lines = take_output();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("demo value=7"));
+}
+
+#[test]
+fn module_suffix_question_mark_and_multi_command_queries_work() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let mut ctl = init_for_tests();
+
+    let matches = ctl
+        .write("module tests func ?refix_debug +p; format \"func filtered*\" +p")
+        .unwrap();
+    assert!(matches >= 2);
+
+    demo_debug(10);
+    prefix_debug(11);
+    function_debug(12);
+
+    let lines = take_output();
+    assert_eq!(lines.len(), 2);
+    assert!(lines.iter().any(|line| line.contains("prefix value=11")));
+    assert!(lines.iter().any(|line| line.contains("func filtered value=12")));
+    assert!(!lines.iter().any(|line| line.contains("demo value=10")));
 }

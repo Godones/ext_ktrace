@@ -11,10 +11,11 @@ Current scope:
 - Supported selectors: `file`, `func`, `module`, `line`, `format`
 - Supported flags:
   - `p`: print enable
-  - `m`: module prefix
-  - `f`: file prefix
-  - `l`: line prefix
   - `t`: thread id prefix
+  - `m`: module prefix
+  - `f`: function prefix
+  - `s`: source file prefix
+  - `l`: line prefix
 
 ## Quick start
 
@@ -51,7 +52,7 @@ fn enable_demo() {
     static_keys::global_init();
     let mut ctl = dynamic_debug_init::<MyOps>();
     assert_eq!(ctl.procfs_path(), "/proc/dynamic_debug/control");
-    ctl.write("func named_demo =pmfl").unwrap();
+    ctl.write("func named_demo =pmfsl").unwrap();
     let listing = ctl.read().unwrap();
 }
 ```
@@ -65,5 +66,7 @@ fn enable_demo() {
 - `format` selector uses substring matching by default, and supports `*` / `?` wildcards.
 - `file` and `module` also support `*` / `?`.
 - `func` matches the captured function name exactly by default, and also supports `*` / `?`.
+- Prefix flags follow Linux dynamic debug semantics: `t` thread id, `m` module, `f` function, `s` source file, `l` line number.
+- The `d` call-trace flag is not implemented yet.
 - Call `static_keys::global_init()` from your runtime before enabling any `pr_debug!` sites.
 - Toggling `p` patches branch sites through the `write_kernel_text` hook, so apply control changes in a serialized context.

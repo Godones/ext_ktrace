@@ -102,8 +102,8 @@ fn main() {
         fake_run();
     }
 
-    ctl.write("func fake_run =pmfl").unwrap(); // only can enable pr_debug_fn sites in fake_run 
-    ctl.write("format \"fake run\" =pmfl").unwrap(); // enable all sites with "fake run" in their format string
+    ctl.write("func fake_run =pmfsl").unwrap(); // only can enable pr_debug_fn sites in fake_run
+    ctl.write("format \"fake run\" =pmsl").unwrap(); // enable all sites with "fake run" in their format string
     let listing = ctl.read().unwrap();
     println!("Current debug sites:\n{listing}");
 
