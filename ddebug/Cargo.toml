@@ -1,0 +1,21 @@
+[package]
+name = "ddebug"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "A no_std Rust crate for Linux-style dynamic debug based on per-callsite static keys."
+readme = "README.md"
+
+[dependencies]
+function_name = "0.3.0"
+lock_api = "0.4"
+static-keys = "0.8"
+
+[dev-dependencies]
+clear-cache = "0.1"
+libc = { version = "0.2", default-features = false }
+spin = "0.10"
+env_logger = "0.11"

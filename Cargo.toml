@@ -1,5 +1,5 @@
 [workspace]
-members = ["bpf-basic", "kprobe", "ktracepoint", "ksym", "tp-lexer"]
+members = ["bpf-basic", "kprobe", "ktracepoint", "ksym", "tp-lexer", "ddebug"]
 resolver = "2"
 
 [workspace.package]
