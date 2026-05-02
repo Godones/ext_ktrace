@@ -213,10 +213,12 @@ mod tests {
 
     #[test]
     fn test_queue_validation() {
-        let mut meta = BpfMapMeta::default();
-        meta.key_size = 0;
-        meta.value_size = 4;
-        meta.max_entries = 2;
+        let mut meta = BpfMapMeta {
+            key_size: 0,
+            value_size: 4,
+            max_entries: 2,
+            ..Default::default()
+        };
 
         let mut queue = QueueMap::new(&meta).unwrap();
 

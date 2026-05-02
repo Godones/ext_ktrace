@@ -238,10 +238,12 @@ mod tests {
 
     #[test]
     fn test_hash_map_flags_and_next_key() {
-        let mut meta = BpfMapMeta::default();
-        meta.key_size = 1;
-        meta.value_size = 4;
-        meta.max_entries = 2;
+        let mut meta = BpfMapMeta {
+            key_size: 1,
+            value_size: 4,
+            max_entries: 2,
+            ..Default::default()
+        };
 
         let mut map = BpfHashMap::new(&meta).unwrap();
 

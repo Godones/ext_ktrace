@@ -107,6 +107,7 @@ mod tracepoint_test {
 
     #[repr(C)]
     #[derive(Debug)]
+    #[allow(clippy::redundant_allocation)]
     struct TestS {
         a: u32,
         b: Box<Arc<u32>>,

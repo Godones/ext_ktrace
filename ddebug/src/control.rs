@@ -428,7 +428,11 @@ fn matches_func(pattern: &str, value: &str) -> bool {
                 .next()
                 .is_some_and(|tail| glob_match(pattern, tail));
     }
-    value == pattern || value.rsplit("::").next().is_some_and(|tail| tail == pattern)
+    value == pattern
+        || value
+            .rsplit("::")
+            .next()
+            .is_some_and(|tail| tail == pattern)
 }
 
 fn matches_format(pattern: &str, value: &str) -> bool {

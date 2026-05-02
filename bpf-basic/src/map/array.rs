@@ -345,10 +345,12 @@ mod tests {
 
     #[test]
     fn test_perf_event_array_validation() {
-        let mut meta = BpfMapMeta::default();
-        meta.key_size = 4;
-        meta.value_size = 4;
-        meta.max_entries = 2;
+        let mut meta = BpfMapMeta {
+            key_size: 4,
+            value_size: 4,
+            max_entries: 2,
+            ..Default::default()
+        };
 
         let mut map = PerfEventArrayMap::new(&meta, 2).unwrap();
 

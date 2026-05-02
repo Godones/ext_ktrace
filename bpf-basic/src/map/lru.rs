@@ -304,28 +304,34 @@ mod tests {
 
     #[test]
     fn test_lru_map() {
-        let mut meta = BpfMapMeta::default();
-        meta.key_size = 1;
-        meta.value_size = 4;
-        meta.max_entries = 3;
+        let mut meta = BpfMapMeta {
+            key_size: 1,
+            value_size: 4,
+            max_entries: 3,
+            ..Default::default()
+        };
         let mut lru_map = LruMap::new(&meta).unwrap();
         test_common_lru(&mut lru_map);
     }
 
     #[test]
     fn test_per_cpu_lru_map() {
-        let mut meta = BpfMapMeta::default();
-        meta.key_size = 1;
-        meta.value_size = 4;
-        meta.max_entries = 3;
+        let mut meta = BpfMapMeta {
+            key_size: 1,
+            value_size: 4,
+            max_entries: 3,
+            ..Default::default()
+        };
         let mut lru_map = PerCpuLruMap::<DummyPerCpuCreator>::new(&meta).unwrap();
         test_common_lru(&mut lru_map);
     }
 
     #[test]
     fn test_create_lru_fail() {
-        let mut meta = BpfMapMeta::default();
-        meta.value_size = 0;
+        let mut meta = BpfMapMeta {
+            value_size: 0,
+            ..Default::default()
+        };
         let res = LruMap::new(&meta);
         assert_eq!(res.err(), Some(BpfError::EINVAL));
         let res = PerCpuLruMap::<DummyPerCpuCreator>::new(&meta);

@@ -1519,11 +1519,9 @@ mod tests {
     fn test_runtime_missing_field_unknown_semantics() {
         // 'user' is in schema but not provided in ctx
         let schema = schema_sig_comm_flags_user();
-        let compiled1 = compile_with_schema("user == root", schema.clone()).expect("compile");
-        let compiled2 =
-            compile_with_schema("user == root || sig == 17", schema.clone()).expect("compile");
-        let compiled3 =
-            compile_with_schema("user == root && sig == 17", schema.clone()).expect("compile");
+        let compiled1 = compile_with_schema("user == root", schema).expect("compile");
+        let compiled2 = compile_with_schema("user == root || sig == 17", schema).expect("compile");
+        let compiled3 = compile_with_schema("user == root && sig == 17", schema).expect("compile");
 
         let mut ctx: BTreeMap<String, String> = BTreeMap::new();
         // Only sig is provided later when needed
@@ -1537,10 +1535,10 @@ mod tests {
     #[test]
     fn test_precedence_and_grouping() {
         let schema = schema_sig_comm_flags_user();
-        let c1 = compile_with_schema("sig == 1 || sig == 2 && comm == bash", schema.clone())
-            .expect("compile");
-        let c2 = compile_with_schema("(sig == 1 || sig == 2) && comm == bash", schema.clone())
-            .expect("compile");
+        let c1 =
+            compile_with_schema("sig == 1 || sig == 2 && comm == bash", schema).expect("compile");
+        let c2 =
+            compile_with_schema("(sig == 1 || sig == 2) && comm == bash", schema).expect("compile");
         let mut ctx: BTreeMap<String, String> = BTreeMap::new();
         ctx.insert("sig".into(), "2".into());
         ctx.insert("comm".into(), "sh".into());
@@ -1574,8 +1572,8 @@ mod tests {
         let schema = schema!(
             "sig" => (u32::FIELD_TYPE, 0, 4),
         );
-        let eq = compile_with_schema("sig == 10", schema.clone()).expect("compile eq");
-        let ne = compile_with_schema("sig != 10", schema.clone()).expect("compile ne");
+        let eq = compile_with_schema("sig == 10", schema).expect("compile eq");
+        let ne = compile_with_schema("sig != 10", schema).expect("compile ne");
         let mut ctx = BTreeMap::new();
         ctx.insert("sig".into(), "10".into());
         assert!(eq.evaluate(&ctx));
@@ -1590,10 +1588,10 @@ mod tests {
         let schema = schema!(
             "v" => (u32::FIELD_TYPE, 0, 4),
         );
-        let lt = compile_with_schema("v < 5", schema.clone()).unwrap();
-        let le = compile_with_schema("v <= 5", schema.clone()).unwrap();
-        let gt = compile_with_schema("v > 5", schema.clone()).unwrap();
-        let ge = compile_with_schema("v >= 5", schema.clone()).unwrap();
+        let lt = compile_with_schema("v < 5", schema).unwrap();
+        let le = compile_with_schema("v <= 5", schema).unwrap();
+        let gt = compile_with_schema("v > 5", schema).unwrap();
+        let ge = compile_with_schema("v >= 5", schema).unwrap();
         let mut ctx = BTreeMap::new();
         ctx.insert("v".into(), "5".into());
         assert!(!lt.evaluate(&ctx));
@@ -1617,7 +1615,7 @@ mod tests {
         let schema = schema!(
             "flags" => (i32::FIELD_TYPE, 0, 4),
         );
-        let cmp = compile_with_schema("flags & 0x10 != 0x10", schema.clone()).unwrap();
+        let cmp = compile_with_schema("flags & 0x10 != 0x10", schema).unwrap();
         let mut ctx = BTreeMap::new();
         ctx.insert("flags".into(), format!("{}", 0x30)); // 0x30 & 0x10 == 0x10 => expression should be false
         assert!(!cmp.evaluate(&ctx));
@@ -1630,8 +1628,8 @@ mod tests {
         let schema = schema!(
             "comm" => (FieldType::Bytes, 0, 16),
         );
-        let eq = compile_with_schema("comm == bash", schema.clone()).unwrap();
-        let ne = compile_with_schema("comm != bash", schema.clone()).unwrap();
+        let eq = compile_with_schema("comm == bash", schema).unwrap();
+        let ne = compile_with_schema("comm != bash", schema).unwrap();
         let mut ctx = BTreeMap::new();
         ctx.insert("comm".into(), "bash".into());
         assert!(eq.evaluate(&ctx));

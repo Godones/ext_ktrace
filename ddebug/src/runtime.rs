@@ -177,14 +177,14 @@ pub(crate) fn scan_debug_sites<K: DebugOps>() -> Vec<&'static DebugSite<K>> {
     for site in raw_sites {
         sites.push(site);
     }
-        sites.sort_by(|lhs, rhs| {
-            lhs.file()
-                .cmp(rhs.file())
-                .then(lhs.line().cmp(&rhs.line()))
-                .then(lhs.module().cmp(rhs.module()))
-                .then(lhs.function().cmp(rhs.function()))
-                .then(lhs.format().cmp(rhs.format()))
-        });
+    sites.sort_by(|lhs, rhs| {
+        lhs.file()
+            .cmp(rhs.file())
+            .then(lhs.line().cmp(&rhs.line()))
+            .then(lhs.module().cmp(rhs.module()))
+            .then(lhs.function().cmp(rhs.function()))
+            .then(lhs.format().cmp(rhs.format()))
+    });
     sites
 }
 
