@@ -3,7 +3,7 @@ members = ["bpf-basic", "kprobe", "ktracepoint", "ksym", "tp-lexer", "ddebug"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.5"
 edition = "2024"
 authors = ["Godones <chenlinfeng25@outlook.com>"]
 license-file = "LICENSE"
@@ -11,4 +11,4 @@ homepage = "https://github.com/Godones/ext_ktrace"
 repository = "https://github.com/Godones/ext_ktrace"
 
 [workspace.dependencies]
-tp-lexer = { version = "0.5.0", path = "tp-lexer" }
+tp-lexer = { version = "0.5.5", path = "tp-lexer" }
