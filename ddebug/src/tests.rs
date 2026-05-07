@@ -234,7 +234,11 @@ fn wildcard_func_selector_matches_only_named_sites() {
     let lines = take_output();
     assert_eq!(lines.len(), 2);
     assert!(lines.iter().any(|line| line.contains("prefix value=2")));
-    assert!(lines.iter().any(|line| line.contains("func filtered value=3")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("func filtered value=3"))
+    );
     assert!(!lines.iter().any(|line| line.contains("demo value=1")));
 }
 
@@ -273,6 +277,10 @@ fn module_suffix_question_mark_and_multi_command_queries_work() {
     let lines = take_output();
     assert_eq!(lines.len(), 2);
     assert!(lines.iter().any(|line| line.contains("prefix value=11")));
-    assert!(lines.iter().any(|line| line.contains("func filtered value=12")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("func filtered value=12"))
+    );
     assert!(!lines.iter().any(|line| line.contains("demo value=10")));
 }

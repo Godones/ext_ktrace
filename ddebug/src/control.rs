@@ -1,5 +1,12 @@
-use alloc::{format, string::String, vec::Vec};
-use core::{fmt, fmt::Write, marker::PhantomData};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+use core::{
+    fmt::{self, Write},
+    marker::PhantomData,
+};
 
 use crate::runtime::{DebugOps, DebugSite, flag_mask_for};
 
@@ -58,7 +65,7 @@ impl<K: DebugOps + 'static> ControlFile<K> {
 
     /// Reads the current dynamic debug catalog.
     pub fn read(&self) -> Result<String, Error> {
-        let mut out = String::new();
+        let mut out = "# filename:lineno [module]function flags format\n".to_string();
         for site in self.sites.iter().copied() {
             write_site_line(&mut out, site);
         }
