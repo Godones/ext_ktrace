@@ -1,6 +1,6 @@
 [package]
 name = "ksym"
-version = "0.5.1"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
