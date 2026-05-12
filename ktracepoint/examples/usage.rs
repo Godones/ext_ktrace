@@ -1,21 +1,32 @@
-use ktracepoint::{
-    RawTracePointCallBackFunc, TraceCmdLineCache, TraceEntryParser, TracePipeOps,
-    TracePointCallBackFunc, TracePointMap, global_init_events,
-};
-use spin::Mutex;
 extern crate alloc;
+use std::collections::BTreeMap;
 
-mod tracepoint_test {
-    use std::{ops::Deref, sync::Arc, time};
+use ktracepoint::{
+    RawTracePointCallBackFunc, TraceCmdLineCache, TraceEntryParser, TraceFilterFile, TracePipeOps,
+    TracePointCallBackFunc, TracePointEnableFile, TracePointMap, global_init_events,
+};
 
-    use ktracepoint::{KernelTraceOps, TraceCmdLineCache, define_event_trace};
-    use spin::Mutex;
+use crate::tracepoint_example::{EXT_TRACEPOINTS, Kops, TRACE_RAW_PIPE};
+
+mod tracepoint_example {
+    use std::{
+        collections::BTreeMap,
+        ops::Deref,
+        sync::{Arc, Mutex, RwLock},
+        time,
+    };
+
+    use ktracepoint::{ExtTracePoint, KernelTraceOps, TraceCmdLineCache, define_event_trace};
 
     pub static TRACE_RAW_PIPE: Mutex<ktracepoint::TracePipeRaw> =
         Mutex::new(ktracepoint::TracePipeRaw::new(1024));
 
     pub static TRACE_CMDLINE_CACHE: Mutex<TraceCmdLineCache> =
         Mutex::new(ktracepoint::TraceCmdLineCache::new(128));
+
+    pub static EXT_TRACEPOINTS: RwLock<BTreeMap<u32, ExtTracePoint<Kops>>> =
+        RwLock::new(BTreeMap::new());
+
     pub struct Kops;
 
     impl KernelTraceOps for Kops {
@@ -34,12 +45,12 @@ mod tracepoint_test {
         }
 
         fn trace_pipe_push_raw_record(buf: &[u8]) {
-            let mut pipe = TRACE_RAW_PIPE.lock();
+            let mut pipe = TRACE_RAW_PIPE.lock().unwrap();
             pipe.push_event(buf.to_vec());
         }
 
         fn trace_cmdline_push(pid: u32) {
-            let mut cache = TRACE_CMDLINE_CACHE.lock();
+            let mut cache = TRACE_CMDLINE_CACHE.lock().unwrap();
             cache.insert(pid, "test_process".to_string());
         }
 
@@ -103,6 +114,22 @@ mod tracepoint_test {
                 panic!("Failed to clear cache.");
             }
         }
+
+        fn read_tracepoint_state<R>(id: u32, f: impl FnOnce(&ExtTracePoint<Self>) -> R) -> R {
+            let states = EXT_TRACEPOINTS.read().unwrap();
+            states
+                .get(&id)
+                .map(f)
+                .unwrap_or_else(|| panic!("Tracepoint state not found for ID: {}", id))
+        }
+
+        fn write_tracepoint_state<R>(id: u32, f: impl FnOnce(&mut ExtTracePoint<Self>) -> R) -> R {
+            let mut states = EXT_TRACEPOINTS.write().unwrap();
+            states
+                .get_mut(&id)
+                .map(f)
+                .unwrap_or_else(|| panic!("Tracepoint state not found for ID: {}", id))
+        }
     }
 
     #[repr(C)]
@@ -115,7 +142,6 @@ mod tracepoint_test {
 
     define_event_trace!(
         TEST,
-        TP_lock(spin::Mutex<()>),
         TP_kops(Kops),
         TP_system(tracepoint_test),
         TP_PROTO(a: u32, b: &TestS),
@@ -141,7 +167,6 @@ mod tracepoint_test {
 
     define_event_trace!(
         TEST2,
-        TP_lock(Mutex<()>),
         TP_kops(Kops),
         TP_system(tracepoint_test),
         TP_PROTO(a: u32, b: u32),
@@ -172,19 +197,15 @@ mod tracepoint_test {
 }
 
 fn print_trace_records(
-    tracepoint_map: &TracePointMap<Mutex<()>, tracepoint_test::Kops>,
+    tracepoint_map: &TracePointMap<Kops>,
     trace_cmdline_cache: &TraceCmdLineCache,
 ) {
-    let mut snapshot = tracepoint_test::TRACE_RAW_PIPE.lock().snapshot();
+    let mut snapshot = TRACE_RAW_PIPE.lock().unwrap().snapshot();
     print!("{}", snapshot.default_fmt_str());
     loop {
         let mut flag = false;
         if let Some(event) = snapshot.peek() {
-            let trace_str = TraceEntryParser::parse::<tracepoint_test::Kops, _>(
-                tracepoint_map,
-                trace_cmdline_cache,
-                event,
-            );
+            let trace_str = TraceEntryParser::parse(tracepoint_map, trace_cmdline_cache, event);
             print!("{}", trace_str);
             flag = true;
         }
@@ -216,63 +237,57 @@ fn main() {
 
     // First, we need to initialize the static keys.
     static_keys::global_init();
+
     // Then, we need to initialize the tracepoint and events.
-    // This will create a new events manager and register the tracepoint.
-    // The events manager will be used to manage the tracepoints and events.
-    let manager = global_init_events::<Mutex<()>, tracepoint_test::Kops>().unwrap();
-    let tracepoint_map = manager.tracepoint_map();
+    let (tracepoint_map, ext_tps) = global_init_events::<Kops>().unwrap();
+
+    let ext_tps = ext_tps
+        .into_iter()
+        .map(|ext_tp| (ext_tp.id(), ext_tp))
+        .collect::<BTreeMap<_, _>>();
+
+    *EXT_TRACEPOINTS.write().unwrap() = ext_tps;
 
     println!("---Before enabling tracepoints---");
-    tracepoint_test::test_trace(1, 2);
-    tracepoint_test::test_trace(3, 4);
+    tracepoint_example::test_trace(1, 2);
+    tracepoint_example::test_trace(3, 4);
     print_trace_records(
         &tracepoint_map,
-        &tracepoint_test::TRACE_CMDLINE_CACHE.lock(),
+        &tracepoint_example::TRACE_CMDLINE_CACHE.lock().unwrap(),
     );
 
     println!();
-    for sbs in manager.subsystem_names() {
-        let subsystem = manager.get_subsystem(&sbs).unwrap();
-        let events = subsystem.event_names();
-        for event in events {
-            let trace_point_info = subsystem.get_event(&event).unwrap();
-            // enable the tracepoint
-            trace_point_info.enable_file().write('1');
 
-            // Register fake callbacks
-            trace_point_info
-                .tracepoint()
-                .register_event_callback(1, Box::new(FakeEventCallback));
+    for ext_tp in EXT_TRACEPOINTS.write().unwrap().values_mut() {
+        let tp = ext_tp.trace_point();
+        let enable_file = TracePointEnableFile::new(tp);
+        enable_file.write('1');
 
-            // Register raw fake callbacks
-            trace_point_info
-                .tracepoint()
-                .register_raw_event_callback(1, Box::new(FakeEventCallback));
+        ext_tp.register_event_callback(1, Box::new(FakeEventCallback));
+        ext_tp.register_raw_event_callback(1, Box::new(FakeEventCallback));
 
-            // Enable the event
-            trace_point_info.tracepoint().enable_event();
+        tp.enable_event();
 
-            trace_point_info
-                .filter_file()
-                .write("(a > 8 && a<=10) || b >5")
-                .unwrap();
+        let mut filter_file = TraceFilterFile::new();
+        filter_file
+            .write(ext_tp, "(a > 8 && a<=10) || b >5")
+            .unwrap();
 
-            let schema = trace_point_info.tracepoint().schema();
-            println!("Schema for {}.{}: {:#?}", sbs, event, schema);
-            println!("Enabled tracepoint: {}.{}", sbs, event);
-        }
+        let schema = tp.schema();
+        println!("Schema for {}::{}: {:#?}", tp.system(), tp.name(), schema);
+        println!("Enabled tracepoint: {}::{}", tp.system(), tp.name());
     }
 
     println!("---After enabling tracepoints---");
-    tracepoint_test::test_trace(1, 2);
-    tracepoint_test::test_trace(9, 2); // should match
-    tracepoint_test::test_trace(3, 4);
-    tracepoint_test::test_trace(10, 4); // should match
-    tracepoint_test::test_trace(11, 6); // should match
+    tracepoint_example::test_trace(1, 2);
+    tracepoint_example::test_trace(9, 2); // should match
+    tracepoint_example::test_trace(3, 4);
+    tracepoint_example::test_trace(10, 4); // should match
+    tracepoint_example::test_trace(11, 6); // should match
 
     print_trace_records(
         &tracepoint_map,
-        &tracepoint_test::TRACE_CMDLINE_CACHE.lock(),
+        &tracepoint_example::TRACE_CMDLINE_CACHE.lock().unwrap(),
     );
 
     for tracepoint in tracepoint_map.values() {

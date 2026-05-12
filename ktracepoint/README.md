@@ -3,7 +3,7 @@
 A Rust tracepoint library for kernel scenarios, designed with goals similar to Linux tracepoints:
 
 - Define events and fields with macros
-- Manage tracepoints by subsystem and event at runtime
+- Manage tracepoints by unique event ID at runtime
 - Support enable/disable, filter expressions, and callbacks
 - Provide both raw event buffering and human-readable output
 - no_std compatible
@@ -13,7 +13,7 @@ Repository: <https://github.com/Starry-OS/tracepoint>
 ## Core Capabilities
 
 - Event definition: use `define_event_trace!` to generate event metadata, call functions, and register functions in one place
-- Event management: `TracingEventsManager -> subsystem -> event`
+- Event management: `TracePointMap` indexed by tracepoint ID
 - Event control: enable/disable, format/id/filter
 - Filter expressions: compiled and evaluated against schema via `tp-lexer`
 - Output pipeline: `TracePipeRaw` + `TraceEntryParser`
@@ -43,8 +43,21 @@ You need to provide:
 - `trace_pipe_push_raw_record`
 - `trace_cmdline_push`
 - `write_kernel_text`
+- tracepoint state registry hooks: `read_tracepoint_state`, `write_tracepoint_state`
 
 `write_kernel_text` is used for static key instruction patching.
+The state registry hooks let your OS choose its own synchronization strategy for callbacks and filters.
+
+### Callback restrictions
+
+`read_tracepoint_state` may hold a read-side lock while the tracing fast path executes callbacks. If your implementation uses a non-reentrant lock such as `RwLock`, callbacks must not:
+
+- register or unregister tracepoint callbacks
+- update tracepoint filters
+- call other APIs that require `write_tracepoint_state`
+- recursively trigger tracepoints backed by the same state registry
+
+Violating these rules may deadlock. Hosts that implement `read_tracepoint_state` with RCU, snapshots, or another non-blocking read-side mechanism may provide weaker restrictions.
 
 ### 4. Define and invoke events
 
@@ -53,7 +66,6 @@ use ktracepoint::{define_event_trace, KernelTraceOps};
 
 define_event_trace!(
     TEST,
-    TP_lock(Mutex<()>),
     TP_kops(Kops),
     TP_system(tracepoint_test),
     TP_PROTO(a: u32, b: u32),
@@ -75,22 +87,25 @@ Note: `TP_STRUCT__entry` participates in byte layout. Ensure your field layout m
 use ktracepoint::global_init_events;
 
 static_keys::global_init();
-let manager = global_init_events::<Mutex<()>, Kops>()?;
+let mut tracepoints = global_init_events::<Kops>()?;
 ```
 
 ### 6. Enable, filter, and consume output
 
 ```rust
-let subsystem = manager.get_subsystem("tracepoint_test").unwrap();
-let event = subsystem.get_event("TEST").unwrap();
+use ktracepoint::{TraceFilterFile, TracePointEnableFile, TracePointFormatFile, TracePointIdFile};
 
-event.enable_file().write('1');
-event.tracepoint().enable_event();
-event.filter_file().write("a > 8 && b > 5").unwrap();
+let event_id = 0;
+let event = tracepoints.get_mut(&event_id).unwrap();
+TracePointEnableFile::new(event.trace_point()).write('1');
+event.trace_point().enable_event();
+
+let mut filter = TraceFilterFile::new();
+filter.write(event, "a > 8 && b > 5").unwrap();
 
 // Read format and ID
-let fmt = event.format_file().read();
-let id = event.id_file().read();
+let fmt = TracePointFormatFile::new(event.trace_point()).read();
+let id = TracePointIdFile::new(event.trace_point()).read();
 ```
 
 ## Run the example
@@ -110,8 +125,7 @@ Example code is in `examples/usage.rs`, covering:
 ## Main Public Types
 
 - `KernelTraceOps`
-- `TracePoint` / `TracePointMap`
-- `TracingEventsManager` / `EventsSubsystem` / `EventInfo`
+- `TracePoint` / `ExtTracePoint` / `TracePointMap`
 - `TracePipeRaw` / `TracePipeSnapshot` / `TracePipeOps`
 - `TraceCmdLineCache` / `TraceEntryParser`
 

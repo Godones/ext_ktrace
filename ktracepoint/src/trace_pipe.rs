@@ -1,7 +1,5 @@
 use alloc::{format, string::String, vec::Vec};
 
-use lock_api::RawMutex;
-
 use crate::{KernelTraceOps, TraceEntry, TracePointMap};
 
 /// A trait defining operations for a trace pipe buffer.
@@ -234,8 +232,8 @@ pub struct TraceEntryParser;
 
 impl TraceEntryParser {
     /// Parse the trace entry and return a formatted string.
-    pub fn parse<K: KernelTraceOps, L: RawMutex + 'static>(
-        tracepoint_map: &TracePointMap<L, K>,
+    pub fn parse<K: KernelTraceOps>(
+        tracepoint_map: &TracePointMap<K>,
         cmdline_cache: &TraceCmdLineCache,
         entry: &[u8],
     ) -> String {

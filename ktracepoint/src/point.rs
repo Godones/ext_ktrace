@@ -1,10 +1,10 @@
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String};
 use core::{
     any::Any,
-    sync::atomic::{AtomicBool, AtomicU32},
+    ops::Deref,
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use lock_api::{Mutex, RawMutex};
 use static_keys::RawStaticFalseKey;
 use tp_lexer::{Compiled, Schema};
 
@@ -43,40 +43,12 @@ impl TraceEntry {
     }
 }
 
-/// The TracePoint structure represents a tracepoint in the system.
-pub struct TracePoint<L: RawMutex + 'static, K: KernelTraceOps + 'static> {
-    name: &'static str,
-    system: &'static str,
-    key: &'static RawStaticFalseKey<KernelCodeManipulator<K>>,
-    event_status: AtomicBool,
-    id: AtomicU32,
-    default_callbacks: Mutex<L, BTreeMap<usize, TracePointFunc>>,
-    event_callbacks: Mutex<L, BTreeMap<usize, Box<dyn TracePointCallBackFunc>>>,
-    raw_event_callbacks: Mutex<L, BTreeMap<usize, Box<dyn RawTracePointCallBackFunc>>>,
-    trace_entry_fmt_func: fn(&[u8]) -> String,
-    trace_print_func: fn() -> String,
-    schema: Schema,
-    compiled_expr: Mutex<L, Option<Compiled>>,
-    flags: u8,
-}
-
-impl<L: RawMutex + 'static, K: KernelTraceOps + 'static> core::fmt::Debug for TracePoint<L, K> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("TracePoint")
-            .field("name", &self.name)
-            .field("system", &self.system)
-            .field("id", &self.id())
-            .field("flags", &self.flags)
-            .finish()
-    }
-}
-
 /// CommonTracePointMeta holds metadata for a common tracepoint.
 #[derive(Debug)]
 #[repr(C)]
-pub struct CommonTracePointMeta<L: RawMutex + 'static, K: KernelTraceOps + 'static> {
+pub struct CommonTracePointMeta<K: KernelTraceOps + 'static> {
     /// A reference to the tracepoint.
-    pub trace_point: &'static TracePoint<L, K>,
+    pub trace_point: &'static TracePoint<K>,
     /// The print function for the tracepoint.
     pub print_func: fn(),
 }
@@ -102,7 +74,152 @@ pub struct TracePointFunc {
     pub data: Box<dyn Any + Send + Sync>,
 }
 
-impl<L: RawMutex + 'static, K: KernelTraceOps + 'static> TracePoint<L, K> {
+/// The TracePoint structure represents a tracepoint in the system.
+pub struct TracePoint<K: KernelTraceOps + 'static> {
+    name: &'static str,
+    system: &'static str,
+    key: &'static RawStaticFalseKey<KernelCodeManipulator<K>>,
+    event_status: AtomicBool,
+    id: AtomicU32,
+    trace_entry_fmt_func: fn(&[u8]) -> String,
+    trace_print_func: fn() -> String,
+    schema: Schema,
+    flags: u8,
+}
+
+impl<K: KernelTraceOps + 'static> core::fmt::Debug for TracePoint<K> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TracePoint")
+            .field("name", &self.name)
+            .field("system", &self.system)
+            .field("id", &self.id())
+            .field("flags", &self.flags)
+            .finish()
+    }
+}
+
+/// An extended tracepoint structure that includes additional callback management and compiled expression handling.
+pub struct ExtTracePoint<K: KernelTraceOps + 'static> {
+    tracepoint: &'static TracePoint<K>,
+    default_callbacks: BTreeMap<usize, TracePointFunc>,
+    event_callbacks: BTreeMap<usize, Box<dyn TracePointCallBackFunc>>,
+    raw_event_callbacks: BTreeMap<usize, Box<dyn RawTracePointCallBackFunc>>,
+    compiled_expr: Option<Compiled>,
+}
+
+impl<K: KernelTraceOps + 'static> core::fmt::Debug for ExtTracePoint<K> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ExtTracePoint")
+            .field("tracepoint", &self.tracepoint)
+            .finish()
+    }
+}
+
+impl<K: KernelTraceOps + 'static> Deref for ExtTracePoint<K> {
+    type Target = TracePoint<K>;
+
+    fn deref(&self) -> &Self::Target {
+        self.tracepoint
+    }
+}
+
+impl<K: KernelTraceOps + 'static> ExtTracePoint<K> {
+    /// Creates a new ExtTracePoint instance.
+    pub const fn new(tracepoint: &'static TracePoint<K>) -> Self {
+        Self {
+            tracepoint,
+            default_callbacks: BTreeMap::new(),
+            event_callbacks: BTreeMap::new(),
+            raw_event_callbacks: BTreeMap::new(),
+            compiled_expr: None,
+        }
+    }
+
+    /// Returns a reference to the underlying TracePoint.
+    pub const fn trace_point(&self) -> &'static TracePoint<K> {
+        self.tracepoint
+    }
+
+    /// Sets the compiled expression for the tracepoint.
+    pub fn set_compiled_expr(&mut self, compiled: Option<Compiled>) {
+        self.compiled_expr = compiled;
+    }
+
+    /// Returns the compiled expression for the tracepoint.
+    pub fn get_compiled_expr(&self) -> Option<Compiled> {
+        self.compiled_expr.clone()
+    }
+
+    /// Register a callback function to the tracepoint
+    pub fn register(&mut self, func: fn(), data: Box<dyn Any + Sync + Send>) {
+        let trace_point_func = TracePointFunc { func, data };
+        let ptr = func as usize;
+        self.default_callbacks
+            .entry(ptr)
+            .or_insert(trace_point_func);
+    }
+
+    /// Unregister a callback function from the tracepoint
+    pub fn unregister(&mut self, func: fn()) {
+        let func_ptr = func as usize;
+        self.default_callbacks.remove(&func_ptr);
+    }
+
+    /// Iterate over all registered callback functions
+    pub fn callback_list(&self, f: &dyn Fn(&TracePointFunc)) {
+        for trace_func in self.default_callbacks.values() {
+            f(trace_func);
+        }
+    }
+
+    /// Register a event callback function to the tracepoint
+    ///
+    /// This function will be called when default tracepoint fmt function is called.
+    pub fn register_event_callback(
+        &mut self,
+        callback_id: usize,
+        callback: Box<dyn TracePointCallBackFunc>,
+    ) {
+        self.event_callbacks.entry(callback_id).or_insert(callback);
+    }
+
+    /// Unregister a event callback function from the tracepoint
+    pub fn unregister_event_callback(&mut self, callback_id: usize) {
+        self.event_callbacks.remove(&callback_id);
+    }
+
+    /// Iterate over all registered event callback functions
+    pub fn event_callback_list(&self, f: &dyn Fn(&Box<dyn TracePointCallBackFunc>)) {
+        for callback in self.event_callbacks.values() {
+            f(callback);
+        }
+    }
+
+    /// Register a raw event callback function to the tracepoint
+    pub fn register_raw_event_callback(
+        &mut self,
+        callback_id: usize,
+        callback: Box<dyn RawTracePointCallBackFunc>,
+    ) {
+        self.raw_event_callbacks
+            .entry(callback_id)
+            .or_insert(callback);
+    }
+
+    /// Unregister a raw event callback function from the tracepoint
+    pub fn unregister_raw_event_callback(&mut self, callback_id: usize) {
+        self.raw_event_callbacks.remove(&callback_id);
+    }
+
+    /// Iterate over all registered raw event callback functions
+    pub fn raw_event_callback_list(&self, f: &dyn Fn(&Box<dyn RawTracePointCallBackFunc>)) {
+        for callback in self.raw_event_callbacks.values() {
+            f(callback);
+        }
+    }
+}
+
+impl<K: KernelTraceOps + 'static> TracePoint<K> {
     /// Creates a new TracePoint instance.
     pub const fn new(
         key: &'static RawStaticFalseKey<KernelCodeManipulator<K>>,
@@ -121,11 +238,7 @@ impl<L: RawMutex + 'static, K: KernelTraceOps + 'static> TracePoint<L, K> {
             flags: 0,
             trace_entry_fmt_func: fmt_func,
             trace_print_func,
-            default_callbacks: Mutex::new(BTreeMap::new()),
-            event_callbacks: Mutex::new(BTreeMap::new()),
-            raw_event_callbacks: Mutex::new(BTreeMap::new()),
             schema,
-            compiled_expr: Mutex::new(None),
         }
     }
 
@@ -146,29 +259,43 @@ impl<L: RawMutex + 'static, K: KernelTraceOps + 'static> TracePoint<L, K> {
 
     /// Sets the ID of the tracepoint.
     pub(crate) fn set_id(&self, id: u32) {
-        self.id.store(id, core::sync::atomic::Ordering::Relaxed);
+        self.id.store(id, Ordering::Relaxed);
     }
 
     /// Returns the ID of the tracepoint.
     pub fn id(&self) -> u32 {
-        self.id.load(core::sync::atomic::Ordering::Relaxed)
+        self.id.load(Ordering::Relaxed)
+    }
+
+    /// Returns the compiled expression for the tracepoint.
+    pub fn get_compiled_expr(&self) -> Option<Compiled> {
+        K::read_tracepoint_state(self.id(), ExtTracePoint::get_compiled_expr)
+    }
+
+    /// Iterate over all registered callback functions.
+    pub fn callback_list(&self, f: &dyn Fn(&TracePointFunc)) {
+        K::read_tracepoint_state(self.id(), |ext_tp| {
+            ext_tp.callback_list(f);
+        });
+    }
+
+    /// Iterate over all registered event callback functions.
+    pub fn event_callback_list(&self, f: &dyn Fn(&Box<dyn TracePointCallBackFunc>)) {
+        K::read_tracepoint_state(self.id(), |ext_tp| {
+            ext_tp.event_callback_list(f);
+        });
+    }
+
+    /// Iterate over all registered raw event callback functions.
+    pub fn raw_event_callback_list(&self, f: &dyn Fn(&Box<dyn RawTracePointCallBackFunc>)) {
+        K::read_tracepoint_state(self.id(), |ext_tp| {
+            ext_tp.raw_event_callback_list(f);
+        });
     }
 
     /// Returns the flags of the tracepoint.
     pub fn flags(&self) -> u8 {
         self.flags
-    }
-
-    /// Sets the compiled expression for the tracepoint.
-    pub fn set_compiled_expr(&self, compiled: Option<Compiled>) {
-        let mut guard = self.compiled_expr.lock();
-        *guard = compiled;
-    }
-
-    /// Returns the compiled expression for the tracepoint.
-    pub fn get_compiled_expr(&self) -> Option<Compiled> {
-        let guard = self.compiled_expr.lock();
-        guard.clone()
     }
 
     /// Returns the format function for the tracepoint.
@@ -183,82 +310,6 @@ impl<L: RawMutex + 'static, K: KernelTraceOps + 'static> TracePoint<L, K> {
     pub fn print_fmt(&self) -> String {
         let post_str = (self.trace_print_func)();
         format!("name: {}\nID: {}\n{}\n", self.name(), self.id(), post_str)
-    }
-
-    /// Register a callback function to the tracepoint
-    pub fn register(&self, func: fn(), data: Box<dyn Any + Sync + Send>) {
-        let trace_point_func = TracePointFunc { func, data };
-        let ptr = func as usize;
-        self.default_callbacks
-            .lock()
-            .entry(ptr)
-            .or_insert(trace_point_func);
-    }
-
-    /// Unregister a callback function from the tracepoint
-    pub fn unregister(&self, func: fn()) {
-        let func_ptr = func as usize;
-        self.default_callbacks.lock().remove(&func_ptr);
-    }
-
-    /// Iterate over all registered callback functions
-    pub fn callback_list(&self, f: &dyn Fn(&TracePointFunc)) {
-        let callback = self.default_callbacks.lock();
-        for trace_func in callback.values() {
-            f(trace_func);
-        }
-    }
-
-    /// Register a event callback function to the tracepoint
-    ///
-    /// This function will be called when default tracepoint fmt function is called.
-    pub fn register_event_callback(
-        &self,
-        callback_id: usize,
-        callback: Box<dyn TracePointCallBackFunc>,
-    ) {
-        self.event_callbacks
-            .lock()
-            .entry(callback_id)
-            .or_insert(callback);
-    }
-
-    /// Unregister a event callback function from the tracepoint
-    pub fn unregister_event_callback(&self, callback_id: usize) {
-        self.event_callbacks.lock().remove(&callback_id);
-    }
-
-    /// Iterate over all registered event callback functions
-    pub fn event_callback_list(&self, f: &dyn Fn(&Box<dyn TracePointCallBackFunc>)) {
-        let raw_callback = self.event_callbacks.lock();
-        for callback in raw_callback.values() {
-            f(callback);
-        }
-    }
-
-    /// Register a raw event callback function to the tracepoint
-    pub fn register_raw_event_callback(
-        &self,
-        callback_id: usize,
-        callback: Box<dyn RawTracePointCallBackFunc>,
-    ) {
-        self.raw_event_callbacks
-            .lock()
-            .entry(callback_id)
-            .or_insert(callback);
-    }
-
-    /// Unregister a raw event callback function from the tracepoint
-    pub fn unregister_raw_event_callback(&self, callback_id: usize) {
-        self.raw_event_callbacks.lock().remove(&callback_id);
-    }
-
-    /// Iterate over all registered raw event callback functions
-    pub fn raw_event_callback_list(&self, f: &dyn Fn(&Box<dyn RawTracePointCallBackFunc>)) {
-        let raw_callback = self.raw_event_callbacks.lock();
-        for callback in raw_callback.values() {
-            f(callback);
-        }
     }
 
     /// Enable the tracepoint for the default print
@@ -282,19 +333,16 @@ impl<L: RawMutex + 'static, K: KernelTraceOps + 'static> TracePoint<L, K> {
 
     /// Enable the tracepoint event for custom event handling
     pub fn enable_event(&self) {
-        self.event_status
-            .store(true, core::sync::atomic::Ordering::Relaxed);
+        self.event_status.store(true, Ordering::Relaxed);
     }
 
     /// Disable the tracepoint event for custom event handling
     pub fn disable_event(&self) {
-        self.event_status
-            .store(false, core::sync::atomic::Ordering::Relaxed);
+        self.event_status.store(false, Ordering::Relaxed);
     }
 
     /// Check if the tracepoint event is enabled for custom event handling
     pub fn event_is_enabled(&self) -> bool {
-        self.event_status
-            .load(core::sync::atomic::Ordering::Relaxed)
+        self.event_status.load(Ordering::Relaxed)
     }
 }

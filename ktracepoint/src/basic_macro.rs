@@ -3,7 +3,6 @@
 /// This macro generates a tracepoint with the specified name, arguments, entry structure, assignment logic, identifier, and print format.
 /// # Parameters
 /// - `name`: The name of the tracepoint.
-/// - `TP_lock`: The lock type to use for the tracepoint.
 /// - `TP_kops`: The kernel trace operations type. `[crate::KernelTraceOps]` is expected to be implemented for this type.
 /// - `TP_system`: The subsystem or system to which the tracepoint belongs.
 /// - `TP_PROTO`: The prototype of the tracepoint function.
@@ -15,12 +14,11 @@
 ///
 /// # Example
 /// ```rust ignore
-/// use lock_api::Mutex;
 /// use crate::KernelTraceOps;
 /// define_event_trace!(
-///     Mutex<()>,
-///     Kops,
 ///     TEST2,
+///     TP_kops(Kops),
+///     TP_system(tracepoint_test),
 ///     TP_PROTO(a: u32, b: u32),
 ///     TP_STRUCT__entry{
 ///           a: u32,
@@ -44,7 +42,6 @@
 macro_rules! define_event_trace{
     (
         $name:ident,
-        TP_lock($lock:path),
         TP_kops($kops:path),
         TP_system($system:ident),
         TP_PROTO($($arg:ident:$arg_type:ty),+ $(,)?),
@@ -58,7 +55,7 @@ macro_rules! define_event_trace{
             static_keys::define_static_key_false_generic!([<__ $name _KEY>], $crate::KernelCodeManipulator<$kops>);
             #[allow(non_upper_case_globals)]
             #[used]
-            static [<__ $name>]: $crate::TracePoint<$lock, $kops> = {
+            static [<__ $name>]: $crate::TracePoint<$kops> = {
                 #[repr(C)]
                 struct Entry {
                     $($entry: $entry_type,)*
@@ -149,13 +146,19 @@ macro_rules! define_event_trace{
             #[allow(non_snake_case)]
             pub fn [<register_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), data: alloc::boxed::Box<dyn core::any::Any+Send+Sync>){
                 let func = unsafe{core::mem::transmute::<fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), fn()>(func)};
-                [<__ $name>].register(func,data);
+                // [<__ $name>].register(func,data);
+                $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                    ext_tp.register(func, data);
+                });
             }
 
             #[allow(non_snake_case)]
             pub fn [<unregister_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*)){
                 let func = unsafe{core::mem::transmute::<fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), fn()>(func)};
-                [<__ $name>].unregister(func);
+                // [<__ $name>].unregister(func);
+                $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                    ext_tp.unregister(func);
+                });
             }
 
 
@@ -163,8 +166,8 @@ macro_rules! define_event_trace{
             #[repr(C)]
             #[allow(non_snake_case,non_camel_case_types)]
             struct [<__ $name _TracePointMeta>]{
-                trace_point: &'static $crate::TracePoint<$lock, $kops>,
-                print_func: fn(&mut (dyn core::any::Any+Send+Sync), $($arg_type),*),
+                trace_point: &'static $crate::TracePoint<$kops>,
+                print_func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*),
             }
 
             #[allow(non_upper_case_globals)]
@@ -176,7 +179,7 @@ macro_rules! define_event_trace{
             };
 
             #[allow(non_snake_case)]
-            fn [<trace_default_ $name>]<F:$crate::KernelTraceOps + 'static>(data:&mut (dyn core::any::Any+Send+Sync), $($arg:$arg_type),* ){
+            fn [<trace_default_ $name>]<F:$crate::KernelTraceOps + 'static>(data:& (dyn core::any::Any+Send+Sync), $($arg:$arg_type),* ){
                 #[repr(C)]
                 struct Entry {
                     $($entry: $entry_type,)*
@@ -210,9 +213,8 @@ macro_rules! define_event_trace{
                         core::mem::size_of::<FullEntry>(),
                     )
                 };
-
                 // evaluate the filter expression
-                let tp = data.downcast_mut::<&'static $crate::TracePoint<$lock, F>>().expect("Invalid tracepoint data");
+                let tp = data.downcast_ref::<&'static $crate::TracePoint<$kops>>().expect("Invalid tracepoint data");
                 let tp_compiled_expr = tp.get_compiled_expr();
                 if let Some(compiled_expr) = tp_compiled_expr {
                     use $crate::tp_lexer::BufContext;
