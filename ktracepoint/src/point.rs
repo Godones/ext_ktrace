@@ -267,32 +267,6 @@ impl<K: KernelTraceOps + 'static> TracePoint<K> {
         self.id.load(Ordering::Relaxed)
     }
 
-    /// Returns the compiled expression for the tracepoint.
-    pub fn get_compiled_expr(&self) -> Option<Compiled> {
-        K::read_tracepoint_state(self.id(), ExtTracePoint::get_compiled_expr)
-    }
-
-    /// Iterate over all registered callback functions.
-    pub fn callback_list(&self, f: &dyn Fn(&TracePointFunc)) {
-        K::read_tracepoint_state(self.id(), |ext_tp| {
-            ext_tp.callback_list(f);
-        });
-    }
-
-    /// Iterate over all registered event callback functions.
-    pub fn event_callback_list(&self, f: &dyn Fn(&Box<dyn TracePointCallBackFunc>)) {
-        K::read_tracepoint_state(self.id(), |ext_tp| {
-            ext_tp.event_callback_list(f);
-        });
-    }
-
-    /// Iterate over all registered raw event callback functions.
-    pub fn raw_event_callback_list(&self, f: &dyn Fn(&Box<dyn RawTracePointCallBackFunc>)) {
-        K::read_tracepoint_state(self.id(), |ext_tp| {
-            ext_tp.raw_event_callback_list(f);
-        });
-    }
-
     /// Returns the flags of the tracepoint.
     pub fn flags(&self) -> u8 {
         self.flags

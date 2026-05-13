@@ -261,7 +261,14 @@ unsafe extern "C" {
 ///
 /// The K type parameter is the kernel trace operations type used for performing kernel-level operations.
 ///
-/// Returns a Result containing the initialized tracepoint map or an error message.
+/// Returns the static tracepoint map and runtime tracepoint states.
+///
+/// The returned [`TracePointMap`] maps tracepoint IDs to static tracepoint
+/// metadata. The returned [`ExtTracePoint`] values contain runtime callback and
+/// filter state. The caller must install these runtime states into the
+/// [`KernelTraceOps::read_tracepoint_state`] and
+/// [`KernelTraceOps::write_tracepoint_state`] backing registry before enabling
+/// or triggering tracepoints.
 pub fn global_init_events<K: KernelTraceOps + 'static>()
 -> Result<(TracePointMap<K>, Vec<ExtTracePoint<K>>), &'static str> {
     static TRACE_POINT_ID: AtomicU32 = AtomicU32::new(0);

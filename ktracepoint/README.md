@@ -87,7 +87,10 @@ Note: `TP_STRUCT__entry` participates in byte layout. Ensure your field layout m
 use ktracepoint::global_init_events;
 
 static_keys::global_init();
-let mut tracepoints = global_init_events::<Kops>()?;
+let (tracepoints, ext_tracepoints) = global_init_events::<Kops>()?;
+
+// Install `ext_tracepoints` into the registry used by
+// Kops::read_tracepoint_state and Kops::write_tracepoint_state.
 ```
 
 ### 6. Enable, filter, and consume output
@@ -96,16 +99,18 @@ let mut tracepoints = global_init_events::<Kops>()?;
 use ktracepoint::{TraceFilterFile, TracePointEnableFile, TracePointFormatFile, TracePointIdFile};
 
 let event_id = 0;
-let event = tracepoints.get_mut(&event_id).unwrap();
-TracePointEnableFile::new(event.trace_point()).write('1');
-event.trace_point().enable_event();
+let tracepoint = tracepoints.get(&event_id).unwrap();
+TracePointEnableFile::new(tracepoint).write('1');
+tracepoint.enable_event();
 
-let mut filter = TraceFilterFile::new();
-filter.write(event, "a > 8 && b > 5").unwrap();
+Kops::write_tracepoint_state(event_id, |event| {
+    let mut filter = TraceFilterFile::new();
+    filter.write(event, "a > 8 && b > 5").unwrap();
+});
 
 // Read format and ID
-let fmt = TracePointFormatFile::new(event.trace_point()).read();
-let id = TracePointIdFile::new(event.trace_point()).read();
+let fmt = TracePointFormatFile::new(tracepoint).read();
+let id = TracePointIdFile::new(tracepoint).read();
 ```
 
 ## Run the example

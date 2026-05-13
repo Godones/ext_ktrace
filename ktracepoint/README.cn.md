@@ -85,7 +85,10 @@ trace_TEST(1, 2);
 use ktracepoint::global_init_events;
 
 static_keys::global_init();
-let mut tracepoints = global_init_events::<Kops>()?;
+let (tracepoints, ext_tracepoints) = global_init_events::<Kops>()?;
+
+// 将 ext_tracepoints 安装到 Kops::read_tracepoint_state 和
+// Kops::write_tracepoint_state 使用的 registry 中。
 ```
 
 ### 6. 启用、过滤、消费输出
@@ -94,16 +97,18 @@ let mut tracepoints = global_init_events::<Kops>()?;
 use ktracepoint::{TraceFilterFile, TracePointEnableFile, TracePointFormatFile, TracePointIdFile};
 
 let event_id = 0;
-let event = tracepoints.get_mut(&event_id).unwrap();
-TracePointEnableFile::new(event.trace_point()).write('1');
-event.trace_point().enable_event();
+let tracepoint = tracepoints.get(&event_id).unwrap();
+TracePointEnableFile::new(tracepoint).write('1');
+tracepoint.enable_event();
 
-let mut filter = TraceFilterFile::new();
-filter.write(event, "a > 8 && b > 5").unwrap();
+Kops::write_tracepoint_state(event_id, |event| {
+    let mut filter = TraceFilterFile::new();
+    filter.write(event, "a > 8 && b > 5").unwrap();
+});
 
 // 读取格式描述
-let fmt = TracePointFormatFile::new(event.trace_point()).read();
-let id = TracePointIdFile::new(event.trace_point()).read();
+let fmt = TracePointFormatFile::new(tracepoint).read();
+let id = TracePointIdFile::new(tracepoint).read();
 ```
 
 ## 运行示例

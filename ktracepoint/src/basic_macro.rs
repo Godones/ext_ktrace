@@ -88,8 +88,9 @@ macro_rules! define_event_trace{
                         let func = unsafe{core::mem::transmute::<fn(),fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*)>(func)};
                         func(data $(,$arg)*);
                     };
-                    let trace_point = &[<__ $name>];
-                    trace_point.callback_list(&mut f);
+                    $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                        ext_tp.callback_list(&mut f);
+                    });
                 }
 
                 // call the raw callback functions
@@ -133,20 +134,23 @@ macro_rules! define_event_trace{
                         f.call(event_buf);
                     };
 
-                    [<__ $name>].event_callback_list(&func);
+                    $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                        ext_tp.event_callback_list(&func);
+                    });
                 }
 
                 let args = [$($crate::ptr::AsU64::as_u64($arg)),*];
                 let func = |f:&alloc::boxed::Box<dyn $crate::RawTracePointCallBackFunc>|{
                     f.call(&args);
                 };
-                [<__ $name>].raw_event_callback_list(&func);
+                $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                    ext_tp.raw_event_callback_list(&func);
+                });
             }
 
             #[allow(non_snake_case)]
             pub fn [<register_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), data: alloc::boxed::Box<dyn core::any::Any+Send+Sync>){
                 let func = unsafe{core::mem::transmute::<fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), fn()>(func)};
-                // [<__ $name>].register(func,data);
                 $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
                     ext_tp.register(func, data);
                 });
@@ -155,7 +159,6 @@ macro_rules! define_event_trace{
             #[allow(non_snake_case)]
             pub fn [<unregister_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*)){
                 let func = unsafe{core::mem::transmute::<fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), fn()>(func)};
-                // [<__ $name>].unregister(func);
                 $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
                     ext_tp.unregister(func);
                 });
@@ -214,11 +217,13 @@ macro_rules! define_event_trace{
                     )
                 };
                 // evaluate the filter expression
-                let tp = data.downcast_ref::<&'static $crate::TracePoint<$kops>>().expect("Invalid tracepoint data");
-                let tp_compiled_expr = tp.get_compiled_expr();
+                let tp_compiled_expr = $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                    ext_tp.get_compiled_expr()
+                });
+
                 if let Some(compiled_expr) = tp_compiled_expr {
                     use $crate::tp_lexer::BufContext;
-                    let buf_ctx = BufContext::new(event_buf, &tp.schema());
+                    let buf_ctx = BufContext::new(event_buf, &[<__ $name>].schema());
                     if !compiled_expr.evaluate(&buf_ctx) {
                         return;
                     }
