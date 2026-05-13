@@ -21,6 +21,7 @@ use alloc::{
     collections::BTreeMap,
     format,
     string::{String, ToString},
+    sync::Arc,
     vec::Vec,
 };
 use core::{
@@ -30,19 +31,19 @@ use core::{
 
 pub use paste;
 pub use point::{
-    CommonTracePointMeta, ExtTracePoint, RawTracePointCallBackFunc, TraceEntry, TracePoint,
-    TracePointCallBackFunc, TracePointFunc,
+    CommonTracePointMeta, ExtTracePoint, RawTraceEventFunc, TraceCallbackType, TraceDefaultFunc,
+    TraceEntry, TraceEventFunc, TracePoint,
 };
 use static_keys::code_manipulate::CodeManipulator;
 pub use tp_lexer;
 use tp_lexer::compile_with_schema;
 pub use trace_pipe::{
     TraceCmdLineCache, TraceCmdLineCacheSnapshot, TraceEntryParser, TracePipeOps, TracePipeRaw,
-    TracePipeSnapshot,
+    TracePipeRecord, TracePipeSnapshot,
 };
 
 /// KernelTraceOps trait provides kernel-level operations for tracing.
-pub trait KernelTraceOps: Send + Sync {
+pub trait KernelTraceOps: Send + Sync + 'static {
     /// Get the current time in nanoseconds.
     fn time_now() -> u64;
     /// Get the current CPU ID.
@@ -91,16 +92,16 @@ impl<T: KernelTraceOps> CodeManipulator for KernelCodeManipulator<T> {
 
 /// TracePointMap is a mapping from tracepoint IDs to TracePoint references.
 #[derive(Debug)]
-pub struct TracePointMap<K: KernelTraceOps + 'static>(BTreeMap<u32, &'static TracePoint<K>>);
+pub struct TracePointMap<K: KernelTraceOps>(BTreeMap<u32, &'static TracePoint<K>>);
 
-impl<K: KernelTraceOps + 'static> TracePointMap<K> {
+impl<K: KernelTraceOps> TracePointMap<K> {
     /// Create a new TracePointMap
     fn new() -> Self {
         Self(BTreeMap::new())
     }
 }
 
-impl<K: KernelTraceOps + 'static> Deref for TracePointMap<K> {
+impl<K: KernelTraceOps> Deref for TracePointMap<K> {
     type Target = BTreeMap<u32, &'static TracePoint<K>>;
 
     fn deref(&self) -> &Self::Target {
@@ -108,7 +109,7 @@ impl<K: KernelTraceOps + 'static> Deref for TracePointMap<K> {
     }
 }
 
-impl<K: KernelTraceOps + 'static> DerefMut for TracePointMap<K> {
+impl<K: KernelTraceOps> DerefMut for TracePointMap<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -116,11 +117,11 @@ impl<K: KernelTraceOps + 'static> DerefMut for TracePointMap<K> {
 
 /// TracePointFormatFile provides a way to get the format of the tracepoint.
 #[derive(Debug, Clone)]
-pub struct TracePointFormatFile<K: KernelTraceOps + 'static> {
+pub struct TracePointFormatFile<K: KernelTraceOps> {
     tracepoint: &'static TracePoint<K>,
 }
 
-impl<K: KernelTraceOps + 'static> TracePointFormatFile<K> {
+impl<K: KernelTraceOps> TracePointFormatFile<K> {
     /// Create a new TracePointFormatFile for the given tracepoint.
     pub fn new(tracepoint: &'static TracePoint<K>) -> Self {
         Self { tracepoint }
@@ -134,33 +135,41 @@ impl<K: KernelTraceOps + 'static> TracePointFormatFile<K> {
     }
 }
 
-/// TracePointEnableFile provides a way to enable or disable the tracepoint.
+/// TracePointEnableFile provides a way to enable or disable the default trace pipe callback.
 #[derive(Debug, Clone)]
-pub struct TracePointEnableFile<K: KernelTraceOps + 'static> {
-    tracepoint: &'static TracePoint<K>,
-}
+pub struct TracePointEnableFile;
 
-impl<K: KernelTraceOps + 'static> TracePointEnableFile<K> {
-    /// Create a new TracePointEnableFile for the given tracepoint.
-    pub fn new(tracepoint: &'static TracePoint<K>) -> Self {
-        Self { tracepoint }
+impl TracePointEnableFile {
+    /// Create a new TracePointEnableFile
+    pub fn new() -> Self {
+        Self {}
     }
 
-    /// Read the tracepoint status
+    /// Read whether the tracepoint static key is enabled.
     ///
     /// Returns true if the tracepoint is enabled, false otherwise.
-    pub fn read(&self) -> &'static str {
-        if self.tracepoint.default_is_enabled() {
+    pub fn read<K: KernelTraceOps>(&self, tracepoint: &'static TracePoint<K>) -> &'static str {
+        if tracepoint.key_is_enabled() {
             "1\n"
         } else {
             "0\n"
         }
     }
-    /// Enable or disable the tracepoint
-    pub fn write(&self, enable: char) {
+    /// Register or unregister the default trace pipe callback.
+    ///
+    /// Registering the default callback enables the tracepoint static key when
+    /// this is the first callback. Unregistering it disables the key when no
+    /// callbacks remain.
+    pub fn write<K: KernelTraceOps>(&self, ext_tracepoint: &mut ExtTracePoint<K>, enable: char) {
         match enable {
-            '1' => self.tracepoint.enable_default(),
-            '0' => self.tracepoint.disable_default(),
+            '1' => {
+                let default_callback = ext_tracepoint.default_callback();
+                ext_tracepoint.register(TraceCallbackType::Default(default_callback));
+            }
+            '0' => {
+                let default_callback = ext_tracepoint.default_callback();
+                ext_tracepoint.unregister(TraceCallbackType::Default(default_callback));
+            }
             _ => {
                 log::warn!("Invalid value for tracepoint enable: {enable}");
             }
@@ -168,13 +177,13 @@ impl<K: KernelTraceOps + 'static> TracePointEnableFile<K> {
     }
 }
 
-/// TracePointEnableFile provides a way to enable or disable the tracepoint.
+/// TracePointIdFile provides a way to read the tracepoint ID.
 #[derive(Debug, Clone)]
-pub struct TracePointIdFile<K: KernelTraceOps + 'static> {
+pub struct TracePointIdFile<K: KernelTraceOps> {
     tracepoint: &'static TracePoint<K>,
 }
 
-impl<K: KernelTraceOps + 'static> TracePointIdFile<K> {
+impl<K: KernelTraceOps> TracePointIdFile<K> {
     /// Create a new TracePointIdFile with the given tracepoint.
     pub fn new(tracepoint: &'static TracePoint<K>) -> Self {
         Self { tracepoint }
@@ -219,7 +228,7 @@ impl TraceFilterFile {
     }
 
     /// Write a new filter expression to the tracepoint.
-    pub fn write<K: KernelTraceOps + 'static>(
+    pub fn write<K: KernelTraceOps>(
         &mut self,
         ext_tracepoint: &mut ExtTracePoint<K>,
         filter: &str,
@@ -269,7 +278,7 @@ unsafe extern "C" {
 /// [`KernelTraceOps::read_tracepoint_state`] and
 /// [`KernelTraceOps::write_tracepoint_state`] backing registry before enabling
 /// or triggering tracepoints.
-pub fn global_init_events<K: KernelTraceOps + 'static>()
+pub fn global_init_events<K: KernelTraceOps>()
 -> Result<(TracePointMap<K>, Vec<ExtTracePoint<K>>), &'static str> {
     static TRACE_POINT_ID: AtomicU32 = AtomicU32::new(0);
     let tracepoint_data_start = __start_tracepoint as *mut CommonTracePointMeta<K>;
@@ -299,8 +308,12 @@ pub fn global_init_events<K: KernelTraceOps + 'static>()
         let id = TRACE_POINT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         tracepoint.set_id(id);
 
-        let mut ext_tracepoint = ExtTracePoint::new(tracepoint);
-        ext_tracepoint.register(tracepoint_meta.print_func, Box::new(tracepoint));
+        let default_callback = Arc::new(TraceDefaultFunc {
+            func: tracepoint_meta.print_func,
+            data: Box::new(()),
+        });
+
+        let ext_tracepoint = ExtTracePoint::new(tracepoint, default_callback);
 
         log::info!(
             "tracepoint registered: {}:{}",

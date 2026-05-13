@@ -81,86 +81,103 @@ macro_rules! define_event_trace{
             #[inline(always)]
             #[allow(non_snake_case)]
             pub fn [<trace_ $name>]( $($arg:$arg_type),* ){
-                if static_keys::static_branch_unlikely!([<__ $name _KEY>]){
-                    let mut f = |trace_func: &$crate::TracePointFunc |{
-                        let func = trace_func.func;
-                        let data = trace_func.data.as_ref();
+                let mut default_handler = |ext_tp: &$crate::ExtTracePoint<$kops>, trace_default_func: &$crate::TraceDefaultFunc |{
+                    let func = trace_default_func.func;
+                    let data = trace_default_func.data.as_ref();
+                    if func as usize == [<trace_default_ $name>]::<$kops> as usize {
+                        let tp_compiled_expr = ext_tp.get_compiled_expr();
+                        let func = [<trace_default_ $name>]::<$kops>;
+                        func(tp_compiled_expr, data, $($arg),*);
+                    }else {
                         let func = unsafe{core::mem::transmute::<fn(),fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*)>(func)};
                         func(data $(,$arg)*);
-                    };
-                    $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
-                        ext_tp.callback_list(&mut f);
-                    });
-                }
-
-                // call the raw callback functions
-                if [<__ $name>].event_is_enabled() {
-                    #[repr(C)]
-                    struct Entry {
-                        $($entry: $entry_type,)*
                     }
-                    #[repr(C)]
-                    struct FullEntry {
-                        common: $crate::TraceEntry,
-                        entry: Entry,
-                    }
-
-                    let entry = Entry {
-                        $($assign: $value,)*
-                    };
-
-                    use $crate::KernelTraceOps;
-                    let pid = $kops::current_pid();
-                    let common = $crate::TraceEntry {
-                        common_type: [<__ $name>].id() as _,
-                        common_flags: [<__ $name>].flags(),
-                        common_preempt_count: 0,
-                        common_pid: pid as i32,
-                    };
-
-                    let full_entry = FullEntry {
-                        common,
-                        entry,
-                    };
-
-                    let event_buf = unsafe {
-                        core::slice::from_raw_parts(
-                            &full_entry as *const FullEntry as *const u8,
-                            core::mem::size_of::<FullEntry>(),
-                        )
-                    };
-
-                    let func = |f:&alloc::boxed::Box<dyn $crate::TracePointCallBackFunc>|{
-                        f.call(event_buf);
-                    };
-
-                    $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
-                        ext_tp.event_callback_list(&func);
-                    });
-                }
-
-                let args = [$($crate::ptr::AsU64::as_u64($arg)),*];
-                let func = |f:&alloc::boxed::Box<dyn $crate::RawTracePointCallBackFunc>|{
-                    f.call(&args);
                 };
-                $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
-                    ext_tp.raw_event_callback_list(&func);
-                });
+
+                let mut event_handler = |event_func: &$crate::TraceEventFunc|{
+                    if event_func.perf_enabled(){
+                        #[repr(C)]
+                        struct Entry {
+                            $($entry: $entry_type,)*
+                        }
+                        #[repr(C)]
+                        struct FullEntry {
+                            common: $crate::TraceEntry,
+                            entry: Entry,
+                        }
+
+                        let entry = Entry {
+                            $($assign: $value,)*
+                        };
+                        use $crate::KernelTraceOps;
+                        let pid = $kops::current_pid();
+                        let common = $crate::TraceEntry {
+                            common_type: [<__ $name>].id() as _,
+                            common_flags: [<__ $name>].flags(),
+                            common_preempt_count: 0,
+                            common_pid: pid as i32,
+                        };
+
+                        let full_entry = FullEntry {
+                            common,
+                            entry,
+                        };
+
+                        let event_buf = unsafe {
+                            core::slice::from_raw_parts(
+                                &full_entry as *const FullEntry as *const u8,
+                                core::mem::size_of::<FullEntry>(),
+                            )
+                        };
+                        event_func.call(event_buf);
+                    }
+                };
+
+                let mut raw_event_handler = |raw_func: &$crate::RawTraceEventFunc|{
+                    let args = [$($crate::ptr::AsU64::as_u64($arg)),*];
+                    raw_func.call(&args);
+                };
+
+
+                if static_keys::static_branch_unlikely!([<__ $name _KEY>]){
+                    $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
+                        for callback in ext_tp.callback_list() {
+                            match callback {
+                              $crate::TraceCallbackType::Default(default_func) => {
+                                  default_handler(ext_tp, default_func);
+                              },
+                              $crate::TraceCallbackType::Event(event_func) => {
+                                  event_handler(event_func);
+                              },
+                              $crate::TraceCallbackType::RawEvent(raw_func) => {
+                                  raw_event_handler(raw_func);
+                              }
+                            }
+                        }
+                    });
+                }
             }
 
             #[allow(non_snake_case)]
-            pub fn [<register_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), data: alloc::boxed::Box<dyn core::any::Any+Send+Sync>){
+            pub fn [<register_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), data: alloc::boxed::Box<dyn core::any::Any+Send+Sync>) -> $crate::TraceCallbackType {
                 let func = unsafe{core::mem::transmute::<fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), fn()>(func)};
+                let callback = $crate::TraceDefaultFunc{
+                    func,
+                    data,
+                };
+
+                let callback_type = $crate::TraceCallbackType::Default(Arc::new(callback));
+
                 $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
-                    ext_tp.register(func, data);
+                    ext_tp.register(callback_type.clone());
                 });
+                callback_type
             }
 
             #[allow(non_snake_case)]
-            pub fn [<unregister_trace_ $name>](func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*)){
-                let func = unsafe{core::mem::transmute::<fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*), fn()>(func)};
+            pub fn [<unregister_trace_ $name>](callback: $crate::TraceCallbackType){
                 $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
-                    ext_tp.unregister(func);
+                    ext_tp.unregister(callback);
                 });
             }
 
@@ -170,7 +187,7 @@ macro_rules! define_event_trace{
             #[allow(non_snake_case,non_camel_case_types)]
             struct [<__ $name _TracePointMeta>]{
                 trace_point: &'static $crate::TracePoint<$kops>,
-                print_func: fn(& (dyn core::any::Any+Send+Sync), $($arg_type),*),
+                print_func: fn(Option<&$crate::tp_lexer::Compiled>, & (dyn core::any::Any+Send+Sync), $($arg_type),*),
             }
 
             #[allow(non_upper_case_globals)]
@@ -182,7 +199,8 @@ macro_rules! define_event_trace{
             };
 
             #[allow(non_snake_case)]
-            fn [<trace_default_ $name>]<F:$crate::KernelTraceOps + 'static>(data:& (dyn core::any::Any+Send+Sync), $($arg:$arg_type),* ){
+            fn [<trace_default_ $name>]<F:$crate::KernelTraceOps>(tp_compiled_expr: Option<&$crate::tp_lexer::Compiled>, data:& (dyn core::any::Any+Send+Sync), $($arg:$arg_type),* )
+            {
                 #[repr(C)]
                 struct Entry {
                     $($entry: $entry_type,)*
@@ -216,10 +234,6 @@ macro_rules! define_event_trace{
                         core::mem::size_of::<FullEntry>(),
                     )
                 };
-                // evaluate the filter expression
-                let tp_compiled_expr = $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
-                    ext_tp.get_compiled_expr()
-                });
 
                 if let Some(compiled_expr) = tp_compiled_expr {
                     use $crate::tp_lexer::BufContext;

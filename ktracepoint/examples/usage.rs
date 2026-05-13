@@ -1,9 +1,9 @@
 extern crate alloc;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use ktracepoint::{
-    RawTracePointCallBackFunc, TraceCmdLineCache, TraceEntryParser, TraceFilterFile, TracePipeOps,
-    TracePointCallBackFunc, TracePointEnableFile, TracePointMap, global_init_events,
+    RawTraceEventFunc, TraceCallbackType, TraceCmdLineCache, TraceEntryParser, TraceEventFunc,
+    TraceFilterFile, TracePipeOps, TracePointEnableFile, TracePointMap, global_init_events,
 };
 
 use crate::tracepoint_example::{EXT_TRACEPOINTS, Kops, TRACE_RAW_PIPE};
@@ -31,11 +31,11 @@ mod tracepoint_example {
 
     impl KernelTraceOps for Kops {
         fn cpu_id() -> u32 {
-            0
+            8
         }
 
         fn current_pid() -> u32 {
-            1
+            0xff
         }
         fn time_now() -> u64 {
             time::SystemTime::now()
@@ -45,8 +45,10 @@ mod tracepoint_example {
         }
 
         fn trace_pipe_push_raw_record(buf: &[u8]) {
+            let time = Self::time_now();
+            let cpu_id = Self::cpu_id();
             let mut pipe = TRACE_RAW_PIPE.lock().unwrap();
-            pipe.push_event(buf.to_vec());
+            pipe.push_record(time, cpu_id, buf.to_vec());
         }
 
         fn trace_cmdline_push(pid: u32) {
@@ -217,18 +219,25 @@ fn print_trace_records(
     }
 }
 
-struct FakeEventCallback;
-
-impl TracePointCallBackFunc for FakeEventCallback {
-    fn call(&self, entry: &[u8]) {
-        println!("FakeEventCallback called with entry: {}", entry.len());
-    }
+fn perf_event_callback() -> TraceCallbackType {
+    let callback = Arc::new(TraceEventFunc::new(
+        Box::new(|entry, _data| {
+            println!("FakeEventCallback called with entry: {}", entry.len());
+        }),
+        Box::new(()),
+    ));
+    callback.set_perf_enable(true);
+    TraceCallbackType::Event(callback)
 }
 
-impl RawTracePointCallBackFunc for FakeEventCallback {
-    fn call(&self, args: &[u64]) {
-        println!("FakeEventCallback (raw) called with args: {:x?}", args);
-    }
+fn raw_event_callback() -> TraceCallbackType {
+    let callback = RawTraceEventFunc::new(
+        Box::new(|args, _data| {
+            println!("FakeEventCallback (raw) called with args: {:x?}", args);
+        }),
+        Box::new(()),
+    );
+    TraceCallbackType::RawEvent(Arc::new(callback))
 }
 
 fn main() {
@@ -258,15 +267,19 @@ fn main() {
 
     println!();
 
+    let perf_event_callback = perf_event_callback();
+
+    let raw_event_callback = raw_event_callback();
+
     for ext_tp in EXT_TRACEPOINTS.write().unwrap().values_mut() {
         let tp = ext_tp.trace_point();
-        let enable_file = TracePointEnableFile::new(tp);
-        enable_file.write('1');
+        let enable_file = TracePointEnableFile::new();
 
-        ext_tp.register_event_callback(1, Box::new(FakeEventCallback));
-        ext_tp.register_raw_event_callback(1, Box::new(FakeEventCallback));
+        // enable default format callback
+        enable_file.write(ext_tp, '1');
 
-        tp.enable_event();
+        ext_tp.register(perf_event_callback.clone());
+        ext_tp.register(raw_event_callback.clone());
 
         let mut filter_file = TraceFilterFile::new();
         filter_file

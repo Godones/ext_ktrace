@@ -2,13 +2,47 @@ use alloc::{format, string::String, vec::Vec};
 
 use crate::{KernelTraceOps, TraceEntry, TracePointMap};
 
+/// A trace pipe record with host-provided metadata captured when the event is written.
+#[derive(Clone, Debug)]
+pub struct TracePipeRecord {
+    timestamp: u64,
+    cpu_id: u32,
+    event: Vec<u8>,
+}
+
+impl TracePipeRecord {
+    /// Create a new trace pipe record.
+    pub fn new(timestamp: u64, cpu_id: u32, event: Vec<u8>) -> Self {
+        Self {
+            timestamp,
+            cpu_id,
+            event,
+        }
+    }
+
+    /// The event timestamp in nanoseconds.
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    /// The CPU ID on which the event was recorded.
+    pub fn cpu_id(&self) -> u32 {
+        self.cpu_id
+    }
+
+    /// The raw trace event payload.
+    pub fn event(&self) -> &[u8] {
+        &self.event
+    }
+}
+
 /// A trait defining operations for a trace pipe buffer.
 pub trait TracePipeOps {
-    /// Returns the first event in the trace pipe buffer without removing it.
-    fn peek(&self) -> Option<&Vec<u8>>;
+    /// Returns the first record in the trace pipe buffer without removing it.
+    fn peek(&self) -> Option<&TracePipeRecord>;
 
-    /// Remove and return the first event in the trace pipe buffer.
-    fn pop(&mut self) -> Option<Vec<u8>>;
+    /// Remove and return the first record in the trace pipe buffer.
+    fn pop(&mut self) -> Option<TracePipeRecord>;
 
     /// Whether the trace pipe buffer is empty.
     fn is_empty(&self) -> bool;
@@ -17,7 +51,7 @@ pub trait TracePipeOps {
 /// A raw trace pipe buffer that stores trace events as byte vectors.
 pub struct TracePipeRaw {
     max_record: usize,
-    event_buf: Vec<Vec<u8>>,
+    event_buf: Vec<TracePipeRecord>,
 }
 
 impl TracePipeRaw {
@@ -35,16 +69,28 @@ impl TracePipeRaw {
     pub fn set_max_record(&mut self, max_record: usize) {
         self.max_record = max_record;
         if self.event_buf.len() > max_record {
-            self.event_buf.truncate(max_record); // Keep only the latest records
+            let remove_count = self.event_buf.len() - max_record;
+            self.event_buf.drain(0..remove_count);
         }
     }
 
-    /// Push a new event into the trace pipe buffer.
+    /// Push a new event into the trace pipe buffer without metadata.
+    ///
+    /// Prefer [`Self::push_record`] when the host can provide event-time metadata.
     pub fn push_event(&mut self, event: Vec<u8>) {
+        self.push_record(0, 0, event);
+    }
+
+    /// Push a new event record into the trace pipe buffer.
+    pub fn push_record(&mut self, timestamp: u64, cpu_id: u32, event: Vec<u8>) {
+        if self.max_record == 0 {
+            return;
+        }
         if self.event_buf.len() >= self.max_record {
             self.event_buf.remove(0); // Remove the oldest record
         }
-        self.event_buf.push(event);
+        self.event_buf
+            .push(TracePipeRecord::new(timestamp, cpu_id, event));
     }
 
     /// The number of events currently in the trace pipe buffer.
@@ -69,11 +115,11 @@ impl TracePipeRaw {
 }
 
 impl TracePipeOps for TracePipeRaw {
-    fn peek(&self) -> Option<&Vec<u8>> {
+    fn peek(&self) -> Option<&TracePipeRecord> {
         self.event_buf.first()
     }
 
-    fn pop(&mut self) -> Option<Vec<u8>> {
+    fn pop(&mut self) -> Option<TracePipeRecord> {
         if self.event_buf.is_empty() {
             None
         } else {
@@ -88,11 +134,11 @@ impl TracePipeOps for TracePipeRaw {
 
 /// A snapshot of the trace pipe buffer at a specific point in time.
 #[derive(Debug)]
-pub struct TracePipeSnapshot(Vec<Vec<u8>>);
+pub struct TracePipeSnapshot(Vec<TracePipeRecord>);
 
 impl TracePipeSnapshot {
     /// Create a new TracePipeSnapshot with the given event buffer.
-    pub fn new(event_buf: Vec<Vec<u8>>) -> Self {
+    pub fn new(event_buf: Vec<TracePipeRecord>) -> Self {
         Self(event_buf)
     }
 
@@ -119,11 +165,11 @@ impl TracePipeSnapshot {
 }
 
 impl TracePipeOps for TracePipeSnapshot {
-    fn peek(&self) -> Option<&Vec<u8>> {
+    fn peek(&self) -> Option<&TracePipeRecord> {
         self.0.first()
     }
 
-    fn pop(&mut self) -> Option<Vec<u8>> {
+    fn pop(&mut self) -> Option<TracePipeRecord> {
         if self.0.is_empty() {
             None
         } else {
@@ -235,8 +281,9 @@ impl TraceEntryParser {
     pub fn parse<K: KernelTraceOps>(
         tracepoint_map: &TracePointMap<K>,
         cmdline_cache: &TraceCmdLineCache,
-        entry: &[u8],
+        record: &TracePipeRecord,
     ) -> String {
+        let entry = record.event();
         let trace_entry = unsafe { &*(entry.as_ptr() as *const TraceEntry) };
         let id = trace_entry.common_type as u32;
         let tracepoint = tracepoint_map.get(&id).expect("TracePoint not found");
@@ -244,8 +291,8 @@ impl TraceEntryParser {
         let offset = core::mem::size_of::<TraceEntry>();
         let str = fmt_func(&entry[offset..]);
 
-        let time = K::time_now();
-        let cpu_id = K::cpu_id();
+        let time = record.timestamp();
+        let cpu_id = record.cpu_id();
 
         // Copy the packed field to a local variable to avoid unaligned reference
         let pid = trace_entry.common_pid;
