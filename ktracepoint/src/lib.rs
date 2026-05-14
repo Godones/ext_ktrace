@@ -44,10 +44,6 @@ pub use trace_pipe::{
 
 /// KernelTraceOps trait provides kernel-level operations for tracing.
 pub trait KernelTraceOps: Send + Sync + 'static {
-    /// Get the current time in nanoseconds.
-    fn time_now() -> u64;
-    /// Get the current CPU ID.
-    fn cpu_id() -> u32;
     /// Get the current process ID.
     fn current_pid() -> u32;
     /// Push a raw record to the trace pipe.

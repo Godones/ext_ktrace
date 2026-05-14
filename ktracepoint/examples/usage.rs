@@ -30,23 +30,16 @@ mod tracepoint_example {
     pub struct Kops;
 
     impl KernelTraceOps for Kops {
-        fn cpu_id() -> u32 {
-            8
-        }
-
         fn current_pid() -> u32 {
             0xff
         }
-        fn time_now() -> u64 {
-            time::SystemTime::now()
-                .duration_since(time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64
-        }
 
         fn trace_pipe_push_raw_record(buf: &[u8]) {
-            let time = Self::time_now();
-            let cpu_id = Self::cpu_id();
+            let time = time::SystemTime::now()
+                .duration_since(time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64;
+            let cpu_id = 8;
             let mut pipe = TRACE_RAW_PIPE.lock().unwrap();
             pipe.push_record(time, cpu_id, buf.to_vec());
         }
