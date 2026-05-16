@@ -1,6 +1,6 @@
 [package]
 name = "ktracepoint"
-version.workspace = true
+version = "0.6.0"
 edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
