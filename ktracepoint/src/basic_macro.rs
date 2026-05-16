@@ -138,7 +138,7 @@ macro_rules! define_event_trace{
                     raw_func.call(&args);
                 };
 
-
+                use $crate::KernelTraceOps;
                 if static_keys::static_branch_unlikely!([<__ $name _KEY>]){
                     $kops::read_tracepoint_state([<__ $name>].id(), |ext_tp|{
                         for callback in ext_tp.callback_list() {
@@ -166,8 +166,9 @@ macro_rules! define_event_trace{
                     data,
                 };
 
-                let callback_type = $crate::TraceCallbackType::Default(Arc::new(callback));
+                let callback_type = $crate::TraceCallbackType::Default(alloc::sync::Arc::new(callback));
 
+                use $crate::KernelTraceOps;
                 $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
                     ext_tp.register(callback_type.clone());
                 });
@@ -176,6 +177,7 @@ macro_rules! define_event_trace{
 
             #[allow(non_snake_case)]
             pub fn [<unregister_trace_ $name>](callback: $crate::TraceCallbackType){
+                use $crate::KernelTraceOps;
                 $kops::write_tracepoint_state([<__ $name>].id(), |ext_tp|{
                     ext_tp.unregister(callback);
                 });

@@ -1,4 +1,7 @@
 use alloc::{format, string::String, vec::Vec};
+use core::num::NonZero;
+
+use lru::LruCache;
 
 use crate::{KernelTraceOps, TraceEntry, TracePointMap};
 
@@ -186,16 +189,15 @@ impl TracePipeOps for TracePipeSnapshot {
 ///
 /// See <https://www.kernel.org/doc/Documentation/trace/ftrace.txt>
 pub struct TraceCmdLineCache {
-    cmdline: Vec<(u32, [u8; 16])>,
-    max_record: usize,
+    // cmdline: Vec<(u32, [u8; 16])>,
+    cmdline: LruCache<u32, String>,
 }
 
 impl TraceCmdLineCache {
     /// Create a new TraceCmdLineCache with the specified maximum number of records.
-    pub const fn new(max_record: usize) -> Self {
+    pub fn new(max_record: NonZero<usize>) -> Self {
         Self {
-            cmdline: Vec::new(),
-            max_record,
+            cmdline: LruCache::new(max_record),
         }
     }
 
@@ -203,68 +205,63 @@ impl TraceCmdLineCache {
     ///
     /// If the command line exceeds 16 bytes, it will be truncated.
     /// If the cache exceeds the maximum record limit, the oldest entry will be removed.
-    pub fn insert(&mut self, id: u32, cmdline: String) {
-        if self.cmdline.len() >= self.max_record {
-            // Remove the oldest entry if we exceed the max record limit
-            self.cmdline.remove(0);
-        }
-        let mut cmdline_bytes = [0u8; 16];
-        if cmdline.len() > 16 {
-            // Truncate to fit the fixed size
-            cmdline_bytes.copy_from_slice(&cmdline.as_bytes()[..16]);
-        } else {
-            // Copy the command line bytes into the fixed size array
-            cmdline_bytes[..cmdline.len()].copy_from_slice(cmdline.as_bytes());
-        }
-        self.cmdline.push((id, cmdline_bytes));
+    pub fn insert(&mut self, id: u32, cmdline: &str) {
+        const MAX_CMDLINE_LEN: usize = 16;
+        let (cmdline, _) = cmdline.split_at(MAX_CMDLINE_LEN.min(cmdline.len()));
+        let line = format!("{} {}\n", id, cmdline);
+        self.cmdline.put(id, line);
     }
 
     /// Get the command line argument for a trace point.
     pub fn get(&self, id: u32) -> Option<&str> {
-        self.cmdline.iter().find_map(|(key, value)| {
-            if *key == id {
-                Some(core::str::from_utf8(value).unwrap().trim_end_matches('\0'))
-            } else {
-                None
-            }
-        })
+        self.cmdline
+            .iter()
+            .find(|(key, _)| **key == id)
+            .map(|(_, value)| {
+                let line = value.as_str();
+                line.splitn(2, ' ').nth(1).unwrap().trim_end_matches('\n')
+            })
     }
 
     /// Set the maximum length for command line arguments.
-    pub fn set_max_record(&mut self, max_len: usize) {
-        self.max_record = max_len;
-        if self.cmdline.len() > max_len {
-            self.cmdline.truncate(max_len); // Keep only the latest records
-        }
+    pub fn set_max_record(&mut self, max_len: NonZero<usize>) {
+        self.cmdline.resize(max_len);
     }
 
     /// Get the maximum number of records in the cache.
     pub fn max_record(&self) -> usize {
-        self.max_record
+        self.cmdline.cap().get()
     }
 
     /// Create a snapshot of the current state of the command line cache.
     pub fn snapshot(&self) -> TraceCmdLineCacheSnapshot {
-        TraceCmdLineCacheSnapshot::new(self.cmdline.clone())
+        let cmdline = self
+            .cmdline
+            .iter()
+            .map(|(_, value)| value)
+            .cloned()
+            .collect();
+        TraceCmdLineCacheSnapshot::new(cmdline)
     }
 }
 
 /// A snapshot of the command line cache at a specific point in time.
 #[derive(Debug)]
-pub struct TraceCmdLineCacheSnapshot(Vec<(u32, [u8; 16])>);
+pub struct TraceCmdLineCacheSnapshot(Vec<String>);
+
 impl TraceCmdLineCacheSnapshot {
     /// Create a new TraceCmdLineCacheSnapshot with the given command line entries.
-    pub fn new(cmdline: Vec<(u32, [u8; 16])>) -> Self {
+    pub fn new(cmdline: Vec<String>) -> Self {
         Self(cmdline)
     }
 
     /// Return the first command line entry in the cache.
-    pub fn peek(&self) -> Option<&(u32, [u8; 16])> {
+    pub fn peek(&self) -> Option<&String> {
         self.0.first()
     }
 
     /// Remove and return the first command line entry in the cache.
-    pub fn pop(&mut self) -> Option<(u32, [u8; 16])> {
+    pub fn pop(&mut self) -> Option<String> {
         if self.0.is_empty() {
             None
         } else {

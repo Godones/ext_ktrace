@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use ktracepoint::{
     RawTraceEventFunc, TraceCallbackType, TraceCmdLineCache, TraceEntryParser, TraceEventFunc,
-    TraceFilterFile, TracePipeOps, TracePointEnableFile, TracePointMap, global_init_events,
+    TraceFilterFile, TracePointEnableFile, TracePointMap, global_init_events,
 };
 
 use crate::tracepoint_example::{EXT_TRACEPOINTS, Kops, TRACE_RAW_PIPE};
@@ -11,25 +11,29 @@ use crate::tracepoint_example::{EXT_TRACEPOINTS, Kops, TRACE_RAW_PIPE};
 mod tracepoint_example {
     use std::{
         collections::BTreeMap,
+        num::NonZero,
         ops::Deref,
-        sync::{Arc, Mutex, RwLock},
+        sync::{Arc, LazyLock, Mutex, RwLock},
         time,
     };
 
-    use ktracepoint::{ExtTracePoint, KernelTraceOps, TraceCmdLineCache, define_event_trace};
+    use ktracepoint::{ExtTracePoint, TraceCmdLineCache, define_event_trace};
 
     pub static TRACE_RAW_PIPE: Mutex<ktracepoint::TracePipeRaw> =
         Mutex::new(ktracepoint::TracePipeRaw::new(1024));
 
-    pub static TRACE_CMDLINE_CACHE: Mutex<TraceCmdLineCache> =
-        Mutex::new(ktracepoint::TraceCmdLineCache::new(128));
+    pub static TRACE_CMDLINE_CACHE: LazyLock<Mutex<TraceCmdLineCache>> = LazyLock::new(|| {
+        Mutex::new(ktracepoint::TraceCmdLineCache::new(
+            NonZero::new(1024).unwrap(),
+        ))
+    });
 
     pub static EXT_TRACEPOINTS: RwLock<BTreeMap<u32, ExtTracePoint<Kops>>> =
         RwLock::new(BTreeMap::new());
 
     pub struct Kops;
 
-    impl KernelTraceOps for Kops {
+    impl ktracepoint::KernelTraceOps for Kops {
         fn current_pid() -> u32 {
             0xff
         }
@@ -46,7 +50,7 @@ mod tracepoint_example {
 
         fn trace_cmdline_push(pid: u32) {
             let mut cache = TRACE_CMDLINE_CACHE.lock().unwrap();
-            cache.insert(pid, "test_process".to_string());
+            cache.insert(pid, "test_process");
         }
 
         // copy from static-keys
@@ -195,6 +199,7 @@ fn print_trace_records(
     tracepoint_map: &TracePointMap<Kops>,
     trace_cmdline_cache: &TraceCmdLineCache,
 ) {
+    use ktracepoint::TracePipeOps;
     let mut snapshot = TRACE_RAW_PIPE.lock().unwrap().snapshot();
     print!("{}", snapshot.default_fmt_str());
     loop {

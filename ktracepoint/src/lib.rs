@@ -92,7 +92,7 @@ pub struct TracePointMap<K: KernelTraceOps>(BTreeMap<u32, &'static TracePoint<K>
 
 impl<K: KernelTraceOps> TracePointMap<K> {
     /// Create a new TracePointMap
-    fn new() -> Self {
+    pub const fn new() -> Self {
         Self(BTreeMap::new())
     }
 }
