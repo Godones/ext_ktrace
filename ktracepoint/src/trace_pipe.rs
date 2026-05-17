@@ -238,6 +238,7 @@ impl TraceCmdLineCache {
         let cmdline = self
             .cmdline
             .iter()
+            .rev()
             .map(|(_, value)| value)
             .cloned()
             .collect();
