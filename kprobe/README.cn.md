@@ -109,7 +109,7 @@ fn on_enter(_data: &dyn ProbeData, regs: &mut PtRegs) {
 
 type MyRawMutex = YourRawMutex;
 
-fn demo(target_addr: usize) {
+fn demo(target_addr: usize) -> Result<(), kprobe::ProbeInstallError> {
     let mut manager = ProbeManager::<MyRawMutex, MyAuxOps>::new();
     let mut points: ProbePointList<MyAuxOps> = BTreeMap::new();
 
@@ -120,9 +120,10 @@ fn demo(target_addr: usize) {
             .with_symbol_addr(target_addr)
             .with_pre_handler(on_enter)
             .with_enable(true),
-    );
+    )?;
 
     unregister_kprobe(&mut manager, &mut points, probe);
+    Ok(())
 }
 ```
 

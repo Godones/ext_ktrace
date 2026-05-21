@@ -103,24 +103,7 @@ impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> ProbeManager<L, F> {
     /// Remove a kprobe from the break_list.
     fn remove_one_break(&mut self, address: usize, probe: &UniProbe<L, F>) {
         if let Some(list) = self.break_list.get_mut(&address) {
-            list.retain(|x| match x {
-                UniProbe::Kprobe(kprobe) => match probe {
-                    UniProbe::Kprobe(kprobe2) => !Arc::ptr_eq(kprobe, kprobe2),
-                    UniProbe::Uprobe(_) | UniProbe::Uretprobe(_) | UniProbe::Kretprobe(_) => true,
-                },
-                UniProbe::Kretprobe(kretprobe) => match probe {
-                    UniProbe::Kprobe(_) | UniProbe::Uprobe(_) | UniProbe::Uretprobe(_) => true,
-                    UniProbe::Kretprobe(kretprobe2) => !Arc::ptr_eq(kretprobe, kretprobe2),
-                },
-                UniProbe::Uprobe(uprobe) => match probe {
-                    UniProbe::Uprobe(uprobe2) => !Arc::ptr_eq(uprobe, uprobe2),
-                    UniProbe::Uretprobe(_) | UniProbe::Kprobe(_) | UniProbe::Kretprobe(_) => true,
-                },
-                UniProbe::Uretprobe(uretprobe) => match probe {
-                    UniProbe::Uprobe(_) | UniProbe::Kprobe(_) | UniProbe::Kretprobe(_) => true,
-                    UniProbe::Uretprobe(uretprobe2) => !Arc::ptr_eq(uretprobe, uretprobe2),
-                },
-            });
+            list.retain(|x| x != probe);
         }
         if self.break_list_len(address) == 0 {
             self.break_list.remove(&address);
@@ -130,24 +113,7 @@ impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> ProbeManager<L, F> {
     /// Remove a kprobe from the debug_list.
     fn remove_one_debug(&mut self, address: usize, probe: &UniProbe<L, F>) {
         if let Some(list) = self.debug_list.get_mut(&address) {
-            list.retain(|x| match x {
-                UniProbe::Kprobe(kprobe) => match &probe {
-                    UniProbe::Kprobe(kprobe2) => !Arc::ptr_eq(kprobe, kprobe2),
-                    UniProbe::Kretprobe(_) | UniProbe::Uprobe(_) | UniProbe::Uretprobe(_) => true,
-                },
-                UniProbe::Kretprobe(kretprobe) => match &probe {
-                    UniProbe::Kprobe(_) | UniProbe::Uprobe(_) | UniProbe::Uretprobe(_) => true,
-                    UniProbe::Kretprobe(kretprobe2) => !Arc::ptr_eq(kretprobe, kretprobe2),
-                },
-                UniProbe::Uprobe(uprobe) => match &probe {
-                    UniProbe::Uprobe(uprobe2) => !Arc::ptr_eq(uprobe, uprobe2),
-                    UniProbe::Uretprobe(_) | UniProbe::Kprobe(_) | UniProbe::Kretprobe(_) => true,
-                },
-                UniProbe::Uretprobe(uretprobe) => match &probe {
-                    UniProbe::Uprobe(_) | UniProbe::Kprobe(_) | UniProbe::Kretprobe(_) => true,
-                    UniProbe::Uretprobe(uretprobe2) => !Arc::ptr_eq(uretprobe, uretprobe2),
-                },
-            });
+            list.retain(|x| x != probe);
         }
         if self.debug_list_len(address) == 0 {
             self.debug_list.remove(&address);

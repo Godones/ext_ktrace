@@ -65,9 +65,28 @@ pub(crate) trait KprobeOps: Send {
     /// Set the dynamic user pointer and return the new debug address.
     fn set_dynamic_user_ptr(&self, ptr: usize) -> usize;
     /// Get the length of the original instruction.
-    fn old_instruction_len(&self) -> usize;
+    fn original_instruction_len(&self) -> usize;
+    /// Get the length of the executable instruction slot.
+    fn instruction_slot_len(&self) -> usize;
     /// Get the pid of the user process, if applicable.
     fn pid(&self) -> Option<i32>;
+}
+
+/// Errors that can occur while installing a probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeInstallError {
+    /// The target address is invalid for the current architecture.
+    InvalidAddress,
+    /// The instruction at the target address could not be decoded.
+    DecodeFailed,
+    /// The decoded instruction is not supported by the current implementation.
+    UnsupportedInstruction,
+    /// The decoded instruction is unsafe to execute out of line.
+    UnsafeInstruction,
+    /// The instruction could not be relocated into the executable slot.
+    RelocationFailed,
+    /// The breakpoint patch could not be applied.
+    PatchFailed,
 }
 
 /// The auxiliary operations required for kprobes.

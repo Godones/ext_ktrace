@@ -7,8 +7,11 @@ use core::{
 
 use lock_api::RawMutex;
 use yaxpeax_arch::LengthedInstruction;
+use yaxpeax_x86::amd64::{Instruction, Opcode, Operand, RegSpec};
 
-use crate::{KprobeAuxiliaryOps, KprobeOps, ProbeBasic, ProbeBuilder, arch::ExecMemType};
+use crate::{
+    KprobeAuxiliaryOps, KprobeOps, ProbeBasic, ProbeBuilder, ProbeInstallError, arch::ExecMemType,
+};
 
 const EBREAK_INST: u8 = 0xcc; // x86_64: 0xcc
 const MAX_INSTRUCTION_SIZE: usize = 15; // x86_64 max instruction length
@@ -81,20 +84,22 @@ impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> DerefMut for Probe<L, F> {
 }
 
 impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
-    pub(crate) fn install<L: RawMutex + 'static>(self) -> (Probe<L, F>, Arc<X86ProbePoint<F>>) {
+    pub(crate) fn install<L: RawMutex + 'static>(
+        self,
+    ) -> Result<(Probe<L, F>, Arc<X86ProbePoint<F>>), ProbeInstallError> {
         let probe_point = match &self.probe_point {
             Some(point) => point.clone(),
-            None => self.replace_inst(),
+            None => self.replace_inst()?,
         };
         let probe = Probe {
             basic: ProbeBasic::from(self),
             point: probe_point.clone(),
         };
-        (probe, probe_point)
+        Ok((probe, probe_point))
     }
 
     /// Replace the instruction at the specified address with a breakpoint instruction.
-    fn replace_inst(&self) -> Arc<X86ProbePoint<F>> {
+    fn replace_inst(&self) -> Result<Arc<X86ProbePoint<F>>, ProbeInstallError> {
         let address = self.symbol_addr + self.offset;
         let inst_tmp = super::alloc_exec_memory::<F>(self.user_pid);
 
@@ -108,7 +113,10 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
         let buf = unsafe { core::slice::from_raw_parts(inst_tmp.as_ptr(), MAX_INSTRUCTION_SIZE) };
 
         let decoder = yaxpeax_x86::amd64::InstDecoder::default();
-        let inst = decoder.decode_slice(buf).unwrap();
+        let inst = decoder
+            .decode_slice(buf)
+            .map_err(|_| ProbeInstallError::DecodeFailed)?;
+        validate_instruction(&inst)?;
         let len = inst.len().to_const();
         log::trace!("inst: {:?}, len: {:?}", inst.to_string(), len);
 
@@ -129,7 +137,80 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
             address,
             self.symbol
         );
-        point
+        Ok(point)
+    }
+}
+
+// References:
+// - Intel SDM, Vol. 2 instruction reference:
+//   https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html
+// - Linux x86 kprobes decode/validation:
+//   https://codebrowser.dev/linux/linux/arch/x86/kernel/kprobes/core.c.html
+fn validate_instruction(inst: &Instruction) -> Result<(), ProbeInstallError> {
+    let opcode = inst.opcode();
+    if opcode.is_jcc()
+        || matches!(
+            opcode,
+            Opcode::Invalid
+                | Opcode::CALL
+                | Opcode::CALLF
+                | Opcode::JMP
+                | Opcode::JMPF
+                | Opcode::JMPE
+                | Opcode::RETURN
+                | Opcode::RETF
+                | Opcode::IRET
+                | Opcode::IRETD
+                | Opcode::IRETQ
+                | Opcode::INT
+                | Opcode::INTO
+                | Opcode::LOOP
+                | Opcode::LOOPZ
+                | Opcode::LOOPNZ
+                | Opcode::JRCXZ
+                | Opcode::SYSCALL
+                | Opcode::SYSRET
+                | Opcode::SWAPGS
+                | Opcode::HLT
+                | Opcode::CLI
+                | Opcode::STI
+                | Opcode::UD0
+                | Opcode::UD1
+                | Opcode::UD2
+                | Opcode::XBEGIN
+        )
+    {
+        return Err(ProbeInstallError::UnsupportedInstruction);
+    }
+
+    for operand_index in 0..inst.operand_count() {
+        if operand_uses_pc(inst.operand(operand_index)) {
+            return Err(ProbeInstallError::UnsafeInstruction);
+        }
+    }
+
+    Ok(())
+}
+
+fn operand_uses_pc(operand: Operand) -> bool {
+    fn is_pc(reg: RegSpec) -> bool {
+        reg == RegSpec::rip() || reg == RegSpec::eip()
+    }
+
+    match operand {
+        Operand::MemDeref { base }
+        | Operand::Disp { base, .. }
+        | Operand::MemDerefMasked { base, .. }
+        | Operand::DispMasked { base, .. } => is_pc(base),
+        Operand::MemIndexScale { index, .. }
+        | Operand::MemIndexScaleDisp { index, .. }
+        | Operand::MemIndexScaleMasked { index, .. }
+        | Operand::MemIndexScaleDispMasked { index, .. } => is_pc(index),
+        Operand::MemBaseIndexScale { base, index, .. }
+        | Operand::MemBaseIndexScaleDisp { base, index, .. }
+        | Operand::MemBaseIndexScaleMasked { base, index, .. }
+        | Operand::MemBaseIndexScaleDispMasked { base, index, .. } => is_pc(base) || is_pc(index),
+        _ => false,
     }
 }
 
@@ -142,7 +223,7 @@ impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> Probe<L, F> {
 
 impl<F: KprobeAuxiliaryOps> KprobeOps for X86ProbePoint<F> {
     fn return_address(&self) -> usize {
-        self.addr + self.old_instruction_len
+        self.addr + self.original_instruction_len()
     }
 
     fn single_step_address(&self) -> usize {
@@ -152,9 +233,9 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for X86ProbePoint<F> {
     fn debug_address(&self) -> usize {
         let dynamic_user_ptr = self.dynamic_user_ptr();
         if dynamic_user_ptr != 0 {
-            dynamic_user_ptr + self.old_instruction_len
+            dynamic_user_ptr + self.original_instruction_len()
         } else {
-            self.old_instruction_ptr.as_ptr() as usize + self.old_instruction_len
+            self.old_instruction_ptr.as_ptr() as usize + self.original_instruction_len()
         }
     }
 
@@ -170,10 +251,14 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for X86ProbePoint<F> {
     fn set_dynamic_user_ptr(&self, ptr: usize) -> usize {
         self.dynamic_user_ptr
             .store(ptr, core::sync::atomic::Ordering::SeqCst);
-        ptr + self.old_instruction_len
+        ptr + self.original_instruction_len()
     }
 
-    fn old_instruction_len(&self) -> usize {
+    fn original_instruction_len(&self) -> usize {
+        self.old_instruction_len
+    }
+
+    fn instruction_slot_len(&self) -> usize {
         self.old_instruction_len
     }
 

@@ -8,8 +8,8 @@ use core::{
 use lock_api::RawMutex;
 
 use super::ExecMemType;
-use crate::{KprobeAuxiliaryOps, KprobeOps, ProbeBasic, ProbeBuilder};
-// const EBREAK_INST: u32 = 0x00100073; // ebreak
+use crate::{KprobeAuxiliaryOps, KprobeOps, ProbeBasic, ProbeBuilder, ProbeInstallError};
+const EBREAK_INST: u32 = 0x00100073; // ebreak
 const C_EBREAK_INST: u32 = 0x9002; // c.ebreak
 const INSN_LENGTH_MASK: u16 = 0x3;
 const INSN_LENGTH_32: u16 = 0x3;
@@ -94,21 +94,26 @@ impl<F: KprobeAuxiliaryOps> Drop for Rv64ProbePoint<F> {
 
 impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
     /// Install the probe and return the probe and its probe point.
-    pub fn install<L: RawMutex + 'static>(self) -> (Probe<L, F>, Arc<Rv64ProbePoint<F>>) {
+    pub fn install<L: RawMutex + 'static>(
+        self,
+    ) -> Result<(Probe<L, F>, Arc<Rv64ProbePoint<F>>), ProbeInstallError> {
         let probe_point = match &self.probe_point {
             Some(point) => point.clone(),
-            None => self.replace_inst(),
+            None => self.replace_inst()?,
         };
         let probe = Probe {
             basic: ProbeBasic::from(self),
             point: probe_point.clone(),
         };
-        (probe, probe_point)
+        Ok((probe, probe_point))
     }
 
     /// Replace the instruction at the specified address with a breakpoint instruction.
-    fn replace_inst(&self) -> Arc<Rv64ProbePoint<F>> {
+    fn replace_inst(&self) -> Result<Arc<Rv64ProbePoint<F>>, ProbeInstallError> {
         let address = self.symbol_addr + self.offset;
+        if address & 0x1 != 0 {
+            return Err(ProbeInstallError::InvalidAddress);
+        }
 
         let mut inst_16 = 0u16;
         F::copy_memory(
@@ -124,6 +129,7 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
 
         let old_instruction;
         if is_inst_16 {
+            validate_inst16(inst_16)?;
             old_instruction = OpcodeTy::Inst16(inst_16);
             unsafe {
                 F::set_writeable_for_address(address, 2, self.user_pid, |ptr| {
@@ -138,6 +144,9 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
                 );
             }
         } else {
+            if address & 0x3 != 0 {
+                return Err(ProbeInstallError::InvalidAddress);
+            }
             let mut inst_32 = 0u32;
             F::copy_memory(
                 address as *const u8,
@@ -145,17 +154,18 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
                 4,
                 self.user_pid,
             );
+            validate_inst32(inst_32)?;
             old_instruction = OpcodeTy::Inst32(inst_32);
             unsafe {
                 F::set_writeable_for_address(address, 4, self.user_pid, |ptr| {
-                    core::ptr::write(ptr as *mut u16, C_EBREAK_INST as _);
+                    core::ptr::write(ptr as *mut u32, EBREAK_INST);
                 });
                 // inst_32 :0-32
                 // ebreak  :32-64
                 core::ptr::write(inst_tmp_ptr.as_ptr() as *mut u32, inst_32);
                 core::ptr::write(
-                    (inst_tmp_ptr.as_ptr() as usize + 4) as *mut u16,
-                    C_EBREAK_INST as _,
+                    (inst_tmp_ptr.as_ptr() as usize + 4) as *mut u32,
+                    EBREAK_INST,
                 );
             }
         }
@@ -175,17 +185,42 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
             self.symbol,
             point.old_instruction
         );
-        Arc::new(point)
+        Ok(Arc::new(point))
+    }
+}
+
+// References:
+// - RISC-V unprivileged ISA manual:
+//   https://docs.riscv.org/reference/isa/_attachments/riscv-unprivileged.pdf
+// - Linux RISC-V kprobes instruction classification:
+//   https://codebrowser.dev/linux/linux/arch/riscv/kernel/probes/decode-insn.c.html
+fn validate_inst16(inst: u16) -> Result<(), ProbeInstallError> {
+    if inst == C_EBREAK_INST as u16 {
+        return Err(ProbeInstallError::UnsupportedInstruction);
+    }
+
+    let quadrant = inst & 0x3;
+    let funct3 = (inst >> 13) & 0x7;
+    match (quadrant, funct3) {
+        // c.jal/c.j/c.beqz/c.bnez use PC-relative control flow.
+        (0x1, 0x1 | 0x5 | 0x6 | 0x7) => Err(ProbeInstallError::UnsafeInstruction),
+        // c.jr/c.jalr/c.ebreak share quadrant 2, funct3 4 and rs2 == 0.
+        (0x2, 0x4) if ((inst >> 2) & 0x1f) == 0 => Err(ProbeInstallError::UnsupportedInstruction),
+        _ => Ok(()),
+    }
+}
+
+fn validate_inst32(inst: u32) -> Result<(), ProbeInstallError> {
+    match inst & 0x7f {
+        // auipc, jalr, branch, jal, fence, and system are not safe without relocation support.
+        0x17 | 0x67 | 0x63 | 0x6f | 0x0f | 0x73 => Err(ProbeInstallError::UnsupportedInstruction),
+        _ => Ok(()),
     }
 }
 
 impl<F: KprobeAuxiliaryOps> KprobeOps for Rv64ProbePoint<F> {
     fn return_address(&self) -> usize {
-        let address = self.addr;
-        match self.old_instruction {
-            OpcodeTy::Inst16(_) => address + 2,
-            OpcodeTy::Inst32(_) => address + 4,
-        }
+        self.addr + self.original_instruction_len()
     }
 
     fn single_step_address(&self) -> usize {
@@ -195,15 +230,9 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for Rv64ProbePoint<F> {
     fn debug_address(&self) -> usize {
         let dynamic_user_ptr = self.dynamic_user_ptr();
         if dynamic_user_ptr == 0 {
-            match self.old_instruction {
-                OpcodeTy::Inst16(_) => self.old_instruction_ptr.as_ptr() as usize + 2,
-                OpcodeTy::Inst32(_) => self.old_instruction_ptr.as_ptr() as usize + 4,
-            }
+            self.old_instruction_ptr.as_ptr() as usize + self.original_instruction_len()
         } else {
-            match self.old_instruction {
-                OpcodeTy::Inst16(_) => dynamic_user_ptr + 2,
-                OpcodeTy::Inst32(_) => dynamic_user_ptr + 4,
-            }
+            dynamic_user_ptr + self.original_instruction_len()
         }
     }
 
@@ -220,16 +249,20 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for Rv64ProbePoint<F> {
     fn set_dynamic_user_ptr(&self, ptr: usize) -> usize {
         self.dynamic_user_ptr
             .store(ptr, core::sync::atomic::Ordering::SeqCst);
+        ptr + self.original_instruction_len()
+    }
+
+    fn original_instruction_len(&self) -> usize {
         match self.old_instruction {
-            OpcodeTy::Inst16(_) => ptr + 2,
-            OpcodeTy::Inst32(_) => ptr + 4,
+            OpcodeTy::Inst16(_) => 2,
+            OpcodeTy::Inst32(_) => 4,
         }
     }
 
-    fn old_instruction_len(&self) -> usize {
+    fn instruction_slot_len(&self) -> usize {
         match self.old_instruction {
-            OpcodeTy::Inst16(_) => 2 * 2,
-            OpcodeTy::Inst32(_) => 2 * 4,
+            OpcodeTy::Inst16(_) => 2 + 2,
+            OpcodeTy::Inst32(_) => 4 + 4,
         }
     }
 

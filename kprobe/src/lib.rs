@@ -42,6 +42,18 @@ pub enum UniProbe<L: RawMutex + 'static, F: KprobeAuxiliaryOps> {
     Uretprobe(Arc<Uretprobe<L, F>>),
 }
 
+impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> PartialEq for UniProbe<L, F> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (UniProbe::Kprobe(kp1), UniProbe::Kprobe(kp2)) => Arc::ptr_eq(kp1, kp2),
+            (UniProbe::Kretprobe(kp1), UniProbe::Kretprobe(kp2)) => Arc::ptr_eq(kp1, kp2),
+            (UniProbe::Uprobe(up1), UniProbe::Uprobe(up2)) => Arc::ptr_eq(up1, up2),
+            (UniProbe::Uretprobe(up1), UniProbe::Uretprobe(up2)) => Arc::ptr_eq(up1, up2),
+            _ => false,
+        }
+    }
+}
+
 impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> Deref for UniProbe<L, F> {
     type Target = Kprobe<L, F>;
     fn deref(&self) -> &Self::Target {
@@ -88,11 +100,11 @@ pub fn register_kretprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps + 'static
     manager: &mut ProbeManager<L, F>,
     kprobe_point_list: &mut ProbePointList<F>,
     kretprobe_builder: KretprobeBuilder<L>,
-) -> Arc<Kretprobe<L, F>> {
+) -> Result<Arc<Kretprobe<L, F>>, ProbeInstallError> {
     let (entry_handler, ret_handler) = kretprobe_builder.handler();
 
     let kprobe_builder = ProbeBuilder::from(kretprobe_builder);
-    let kprobe = kprobe::__register_kprobe(kprobe_point_list, kprobe_builder);
+    let kprobe = kprobe::__register_kprobe(kprobe_point_list, kprobe_builder)?;
 
     let kretprobe = Kretprobe::new(kprobe, entry_handler, ret_handler);
     let kretprobe = Arc::new(kretprobe);
@@ -102,7 +114,7 @@ pub fn register_kretprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps + 'static
     *data.retprobe.lock() = Arc::downgrade(&kretprobe);
 
     manager.insert_probe(UniProbe::Kretprobe(kretprobe.clone()));
-    kretprobe
+    Ok(kretprobe)
 }
 
 /// Unregister a kretprobe.

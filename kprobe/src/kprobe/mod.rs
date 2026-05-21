@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 use lock_api::RawMutex;
 
 use crate::{
-    KprobeAuxiliaryOps, KprobeOps, ProbeBuilder, ProbeManager, ProbePointList, PtRegs, UniProbe,
-    arch::Probe, clear_single_step, setup_single_step,
+    KprobeAuxiliaryOps, KprobeOps, ProbeBuilder, ProbeInstallError, ProbeManager, ProbePointList,
+    PtRegs, UniProbe, arch::Probe, clear_single_step, setup_single_step,
 };
 
 /// The kprobe structure for the current architecture.
@@ -13,16 +13,16 @@ pub type Kprobe<L, F> = Probe<L, F>;
 pub(crate) fn __register_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
     kprobe_point_list: &mut ProbePointList<F>,
     kprobe_builder: ProbeBuilder<F>,
-) -> Kprobe<L, F> {
+) -> Result<Kprobe<L, F>, ProbeInstallError> {
     let address = kprobe_builder.probe_addr();
     let existed_point = kprobe_point_list.get(&address).map(Clone::clone);
 
     match existed_point {
-        Some(existed_point) => kprobe_builder.with_probe_point(existed_point).install().0,
+        Some(existed_point) => Ok(kprobe_builder.with_probe_point(existed_point).install()?.0),
         None => {
-            let (kprobe, probe_point) = kprobe_builder.install();
+            let (kprobe, probe_point) = kprobe_builder.install()?;
             kprobe_point_list.insert(address, probe_point);
-            kprobe
+            Ok(kprobe)
         }
     }
 }
@@ -41,11 +41,11 @@ pub fn register_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
     manager: &mut ProbeManager<L, F>,
     kprobe_point_list: &mut ProbePointList<F>,
     kprobe_builder: ProbeBuilder<F>,
-) -> Arc<Kprobe<L, F>> {
-    let kprobe = __register_kprobe(kprobe_point_list, kprobe_builder);
+) -> Result<Arc<Kprobe<L, F>>, ProbeInstallError> {
+    let kprobe = __register_kprobe(kprobe_point_list, kprobe_builder)?;
     let kprobe = Arc::new(kprobe);
     manager.insert_probe(UniProbe::Kprobe(kprobe.clone()));
-    kprobe
+    Ok(kprobe)
 }
 
 /// Unregister a kprobe.
@@ -78,7 +78,7 @@ pub fn unregister_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - An `Option` containing the result of the kprobe handler. If no kprobe is found, it returns `None`.
 ///
 pub fn kprobe_handler_from_break<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     pt_regs: &mut PtRegs,
 ) -> Option<()> {
     let break_addr = pt_regs.break_address();
@@ -110,7 +110,7 @@ pub fn kprobe_handler_from_break<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - An `Option` containing the result of the kprobe handler. If no kprobe is found, it returns `None`.
 ///
 pub fn kprobe_handler_from_debug<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     pt_regs: &mut PtRegs,
 ) -> Option<()> {
     let pc = pt_regs.debug_address();

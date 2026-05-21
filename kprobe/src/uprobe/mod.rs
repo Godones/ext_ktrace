@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 use lock_api::RawMutex;
 
 use crate::{
-    KprobeAuxiliaryOps, KprobeOps, ProbeBuilder, ProbeManager, ProbePointList, PtRegs, UniProbe,
-    arch::Probe, clear_single_step, setup_single_step,
+    KprobeAuxiliaryOps, KprobeOps, ProbeBuilder, ProbeInstallError, ProbeManager, ProbePointList,
+    PtRegs, UniProbe, arch::Probe, clear_single_step, setup_single_step,
 };
 
 /// The uprobe structure for the current architecture.
@@ -24,15 +24,15 @@ pub fn register_uprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
     manager: &mut ProbeManager<L, F>,
     uprobe_point_list: &mut ProbePointList<F>,
     uprobe_builder: ProbeBuilder<F>,
-) -> Arc<Uprobe<L, F>> {
+) -> Result<Arc<Uprobe<L, F>>, ProbeInstallError> {
     assert!(
         uprobe_builder.user_pid.is_some(),
         "The builder must be for uprobe"
     );
-    let uprobe = crate::__register_kprobe(uprobe_point_list, uprobe_builder);
+    let uprobe = crate::__register_kprobe(uprobe_point_list, uprobe_builder)?;
     let uprobe = Arc::new(uprobe);
     manager.insert_probe(UniProbe::Uprobe(uprobe.clone()));
-    uprobe
+    Ok(uprobe)
 }
 
 /// Unregister a uprobe.
@@ -83,13 +83,13 @@ pub fn uprobe_handler_from_break<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
         if dynamic_user_ptr != 0 {
             setup_single_step(pt_regs, dynamic_user_ptr);
         } else {
-            let old_instruction_len = point.old_instruction_len();
+            let instruction_slot_len = point.instruction_slot_len();
             let single_step_address = point.single_step_address() as *mut u8;
             let pid = point.pid();
             let user_ptr = F::alloc_user_exec_memory(pid, |ptr| {
                 unsafe {
-                    // Copy the old instruction back to user space
-                    core::ptr::copy_nonoverlapping(single_step_address, ptr, old_instruction_len);
+                    // Copy the prepared instruction slot back to user space.
+                    core::ptr::copy_nonoverlapping(single_step_address, ptr, instruction_slot_len);
                 }
             });
 
@@ -125,7 +125,7 @@ pub fn uprobe_handler_from_break<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - An `Option` containing the result of the uprobe handler. If no uprobe is found, it returns `None`.
 ///
 pub fn uprobe_handler_from_debug<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    uprobe_manager: &mut ProbeManager<L, F>,
+    uprobe_manager: &ProbeManager<L, F>,
     pt_regs: &mut PtRegs,
 ) -> Option<()> {
     let pc = pt_regs.debug_address();

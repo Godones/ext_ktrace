@@ -13,7 +13,7 @@ use super::{
     ExecMemType, KprobeAuxiliaryOps,
     retprobe::{RetprobeInstance, rethook_trampoline_handler},
 };
-use crate::{KprobeOps, ProbeBasic, ProbeBuilder};
+use crate::{KprobeOps, ProbeBasic, ProbeBuilder, ProbeInstallError};
 
 /// See <https://elixir.bootlin.com/linux/v6.6/source/arch/arm64/include/uapi/asm/ptrace.h#L58>
 const PSR_V_BIT_POS: usize = 0x10000000;
@@ -105,21 +105,26 @@ impl<F: KprobeAuxiliaryOps> Drop for AArch64ProbePoint<F> {
 
 impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
     /// Install the kprobe by replacing the instruction at the specified address with a breakpoint instruction.
-    pub fn install<L: RawMutex + 'static>(self) -> (Probe<L, F>, Arc<AArch64ProbePoint<F>>) {
+    pub fn install<L: RawMutex + 'static>(
+        self,
+    ) -> Result<(Probe<L, F>, Arc<AArch64ProbePoint<F>>), ProbeInstallError> {
         let probe_point = match &self.probe_point {
             Some(point) => point.clone(),
-            None => self.replace_inst(),
+            None => self.replace_inst()?,
         };
         let kprobe = Probe {
             basic: ProbeBasic::from(self),
             point: probe_point.clone(),
         };
-        (kprobe, probe_point)
+        Ok((kprobe, probe_point))
     }
 
     /// Replace the instruction at the specified address with a breakpoint instruction.
-    fn replace_inst(&self) -> Arc<AArch64ProbePoint<F>> {
+    fn replace_inst(&self) -> Result<Arc<AArch64ProbePoint<F>>, ProbeInstallError> {
         let address = self.symbol_addr + self.offset;
+        if address & (BRK64_INST_LEN - 1) != 0 {
+            return Err(ProbeInstallError::InvalidAddress);
+        }
 
         let inst_tmp_ptr = super::alloc_exec_memory::<F>(self.user_pid);
         let mut inst_32 = 0u32;
@@ -129,6 +134,7 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
             4,
             self.user_pid,
         );
+        validate_instruction(inst_32)?;
 
         unsafe {
             F::set_writeable_for_address(address, BRK64_INST_LEN, self.user_pid, |ptr| {
@@ -158,13 +164,49 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
             self.symbol,
             inst_32
         );
-        Arc::new(point)
+        Ok(Arc::new(point))
     }
+}
+
+// References:
+// - Arm A64 base instruction reference:
+//   https://developer.arm.com/documentation/ddi0487/latest
+// - Armv8-A ISA overview, PC-relative and branch behavior:
+//   https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/Armv8-A%20Instruction%20Set%20Architecture.pdf
+// - Linux arm64 kprobes decode path:
+//   https://codebrowser.dev/linux/linux/arch/arm64/kernel/probes/kprobes.c.html
+fn validate_instruction(inst: u32) -> Result<(), ProbeInstallError> {
+    if inst == BRK64_OPCODE_KPROBES || inst == BRK64_OPCODE_KPROBES_SS {
+        return Err(ProbeInstallError::UnsupportedInstruction);
+    }
+
+    let is_unconditional_branch = (inst & 0x7c00_0000) == 0x1400_0000;
+    let is_compare_branch = (inst & 0x7e00_0000) == 0x3400_0000;
+    let is_test_branch = (inst & 0x7e00_0000) == 0x3600_0000;
+    let is_conditional_branch = (inst & 0xff00_0010) == 0x5400_0000;
+    let is_register_branch = matches!(inst & 0xffff_fc1f, 0xd61f_0000 | 0xd63f_0000 | 0xd65f_0000);
+    let is_pc_relative_address = (inst & 0x9f00_0000) == 0x1000_0000;
+    let is_literal_load = (inst & 0x3b00_0000) == 0x1800_0000;
+    let is_exception_or_system = matches!(inst & 0xff00_0000, 0xd400_0000 | 0xd500_0000);
+
+    if is_unconditional_branch
+        || is_compare_branch
+        || is_test_branch
+        || is_conditional_branch
+        || is_register_branch
+        || is_pc_relative_address
+        || is_literal_load
+        || is_exception_or_system
+    {
+        return Err(ProbeInstallError::UnsafeInstruction);
+    }
+
+    Ok(())
 }
 
 impl<F: KprobeAuxiliaryOps> KprobeOps for AArch64ProbePoint<F> {
     fn return_address(&self) -> usize {
-        self.addr + 4
+        self.addr + self.original_instruction_len()
     }
 
     fn single_step_address(&self) -> usize {
@@ -174,9 +216,9 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for AArch64ProbePoint<F> {
     fn debug_address(&self) -> usize {
         let dyn_ptr = self.dynamic_user_ptr();
         if dyn_ptr != 0 {
-            dyn_ptr + BRK64_INST_LEN
+            dyn_ptr + self.original_instruction_len()
         } else {
-            self.old_instruction_ptr.as_ptr() as usize + 4
+            self.old_instruction_ptr.as_ptr() as usize + self.original_instruction_len()
         }
     }
 
@@ -192,11 +234,15 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for AArch64ProbePoint<F> {
     fn set_dynamic_user_ptr(&self, ptr: usize) -> usize {
         self.dynamic_user_ptr
             .store(ptr, core::sync::atomic::Ordering::SeqCst);
-        ptr + BRK64_INST_LEN
+        ptr + self.original_instruction_len()
     }
 
-    fn old_instruction_len(&self) -> usize {
-        4 * 2
+    fn original_instruction_len(&self) -> usize {
+        BRK64_INST_LEN
+    }
+
+    fn instruction_slot_len(&self) -> usize {
+        BRK64_INST_LEN * 2
     }
 
     fn pid(&self) -> Option<i32> {

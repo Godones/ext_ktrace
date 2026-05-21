@@ -11,7 +11,7 @@ use super::{
     ExecMemType, KprobeAuxiliaryOps,
     retprobe::{RetprobeInstance, rethook_trampoline_handler},
 };
-use crate::{KprobeOps, ProbeBasic, ProbeBuilder};
+use crate::{KprobeOps, ProbeBasic, ProbeBuilder, ProbeInstallError};
 // const BRK_KPROBE_BP: u64 = 10;
 // const BRK_KPROBE_SSTEPBP: u64 = 11;
 const EBREAK_INST: u32 = 0x002a0000;
@@ -87,21 +87,26 @@ impl<F: KprobeAuxiliaryOps> Drop for LA64ProbePoint<F> {
 
 impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
     /// Install the kprobe by replacing the instruction at the specified address with a breakpoint instruction.
-    pub fn install<L: RawMutex + 'static>(self) -> (Probe<L, F>, Arc<LA64ProbePoint<F>>) {
+    pub fn install<L: RawMutex + 'static>(
+        self,
+    ) -> Result<(Probe<L, F>, Arc<LA64ProbePoint<F>>), ProbeInstallError> {
         let probe_point = match &self.probe_point {
             Some(point) => point.clone(),
-            None => self.replace_inst(),
+            None => self.replace_inst()?,
         };
         let probe = Probe {
             basic: ProbeBasic::from(self),
             point: probe_point.clone(),
         };
-        (probe, probe_point)
+        Ok((probe, probe_point))
     }
 
     /// Replace the instruction at the specified address with a breakpoint instruction.
-    fn replace_inst(&self) -> Arc<LA64ProbePoint<F>> {
+    fn replace_inst(&self) -> Result<Arc<LA64ProbePoint<F>>, ProbeInstallError> {
         let address = self.symbol_addr + self.offset;
+        if address & (EBREAK_INST_LEN - 1) != 0 {
+            return Err(ProbeInstallError::InvalidAddress);
+        }
 
         let inst_tmp_ptr = super::alloc_exec_memory::<F>(self.user_pid);
         let mut inst_32 = 0u32;
@@ -111,6 +116,7 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
             4,
             self.user_pid,
         );
+        validate_instruction(inst_32)?;
 
         unsafe {
             F::set_writeable_for_address(address, EBREAK_INST_LEN, self.user_pid, |ptr| {
@@ -141,13 +147,32 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
             self.symbol,
             inst_32
         );
-        Arc::new(point)
+        Ok(Arc::new(point))
     }
+}
+
+// References:
+// - LoongArch Reference Manual, Vol. 1:
+//   https://loongson.github.io/LoongArch-Documentation/LoongArch-Vol1-EN.html
+// - Linux LoongArch kprobes implementation:
+//   https://codebrowser.dev/linux/linux/arch/loongarch/kernel/kprobes.c.html
+fn validate_instruction(inst: u32) -> Result<(), ProbeInstallError> {
+    if inst == EBREAK_INST {
+        return Err(ProbeInstallError::UnsupportedInstruction);
+    }
+
+    let opcode = inst >> 26;
+    // LoongArch branch and PC-relative forms require relocation support before out-of-line use.
+    if matches!(opcode, 0x13..=0x17 | 0x19..=0x1b) {
+        return Err(ProbeInstallError::UnsafeInstruction);
+    }
+
+    Ok(())
 }
 
 impl<F: KprobeAuxiliaryOps> KprobeOps for LA64ProbePoint<F> {
     fn return_address(&self) -> usize {
-        self.addr + 4
+        self.addr + self.original_instruction_len()
     }
 
     fn single_step_address(&self) -> usize {
@@ -157,9 +182,9 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for LA64ProbePoint<F> {
     fn debug_address(&self) -> usize {
         let dyn_ptr = self.dynamic_user_ptr();
         if dyn_ptr != 0 {
-            dyn_ptr + EBREAK_INST_LEN
+            dyn_ptr + self.original_instruction_len()
         } else {
-            self.old_instruction_ptr.as_ptr() as usize + 4
+            self.old_instruction_ptr.as_ptr() as usize + self.original_instruction_len()
         }
     }
 
@@ -176,11 +201,15 @@ impl<F: KprobeAuxiliaryOps> KprobeOps for LA64ProbePoint<F> {
         self.dynamic_user_ptr
             .store(ptr, core::sync::atomic::Ordering::SeqCst);
 
-        ptr + EBREAK_INST_LEN
+        ptr + self.original_instruction_len()
     }
 
-    fn old_instruction_len(&self) -> usize {
-        4 * 2
+    fn original_instruction_len(&self) -> usize {
+        EBREAK_INST_LEN
+    }
+
+    fn instruction_slot_len(&self) -> usize {
+        EBREAK_INST_LEN * 2
     }
 
     fn pid(&self) -> Option<i32> {
