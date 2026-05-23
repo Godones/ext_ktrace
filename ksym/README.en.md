@@ -28,7 +28,7 @@ KallsymsBlob is a build-time container used to collect symbols, compress them, a
 - kallsyms_addresses: Vec<u64>
   - Symbol virtual addresses in ascending order (address order).
 - kallsyms_num_syms: usize
-  - Number of symbols (also written as a u64 header in the blob).
+  - Number of symbols (written as a u64 after `total_bytes`).
 
 Relationship:
 - For the i-th symbol in address order:
@@ -69,18 +69,19 @@ All fields are serialized in little-endian. To support zero-copy reading with pr
 
 Segment order (alignment in parentheses):
 
-1) num_syms: u64
-2) addresses[num_syms]: u64[]  (align 8)
-3) offsets[num_syms]: u32[]    (align 4)
-4) seqs[num_syms]: u32[]       (align 4)
-5) names:                      (align 8)
+1) total_bytes: u64
+2) num_syms: u64
+3) addresses[num_syms]: u64[]  (align 8)
+4) offsets[num_syms]: u32[]    (align 4)
+5) seqs[num_syms]: u32[]       (align 4)
+6) names:                      (align 8)
    - names_len: u64
    - names_bytes[names_len]: u8[]
      - repeated name records: `[[type: u8] [len: u16(le)] [payload: u8[len]]`
-6) token_table:                (align 8)
+7) token_table:                (align 8)
    - token_table_len: u64
    - token_table_bytes[token_table_len]: u8[]
-7) token_index:                (align 8 for len, then align 4 for array)
+8) token_index:                (align 8 for len, then align 4 for array)
    - token_index_len: u64
    - token_index[token_index_len]: u32[] (align 4)
 
@@ -101,7 +102,7 @@ Notes:
 - Up to 512 tokens; token id is u16.
 - Each name record has a 2-byte little-endian length; maximum payload per record is 65535 bytes.
 - `kallsyms_offsets` is u32, limiting the total size of `kallsyms_names` to < 4 GiB.
-- All top-level integers (num_syms, addresses, offsets, seqs, names_len, token_table_len, token_index_len, and token_index contents) are little-endian; name record length is also little-endian.
+- All top-level integers (total_bytes, num_syms, addresses, offsets, seqs, names_len, token_table_len, token_index_len, and token_index contents) are little-endian; name record length is also little-endian.
 - Compression applies at most one token at the beginning; the rest remains raw bytes. Heavier compression strategies can be added in the future if needed.
 
 ## Usage

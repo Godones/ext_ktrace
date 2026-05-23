@@ -35,6 +35,15 @@ pub struct KallsymsMapped<'a> {
 }
 
 impl<'a> KallsymsMapped<'a> {
+    /// Check the total bytes of the blob and return it. The total bytes is stored in the first 8 bytes of the blob.
+    pub fn check_total_bytes(blob: &[u8]) -> Result<u64, &'static str> {
+        if blob.len() < 8 {
+            return Err("Blob is too small to contain the total byte count");
+        }
+        let total_bytes = u64::from_le_bytes(blob[0..8].try_into().unwrap());
+        Ok(total_bytes)
+    }
+
     /// Convert binary data into the blob structure and return KallsymsMapped.
     /// # Safety
     /// The input blob must be well-formed and valid.
@@ -51,6 +60,13 @@ impl<'a> KallsymsMapped<'a> {
             let addr = (addr + align - 1) & !(align - 1);
             addr - base
         };
+
+        let total_bytes = Self::check_total_bytes(blob)?;
+        if total_bytes != blob.len() as u64 {
+            return Err("The total bytes in the blob does not match the actual blob length");
+        }
+
+        off += 8; // skip total bytes
 
         // read num_syms (u64)
         if off + 8 > blob.len() {
@@ -166,11 +182,7 @@ impl<'a> KallsymsMapped<'a> {
     /// Expand a compressed symbol data into the resulting uncompressed string,
     /// if uncompressed string is too long (>= maxlen), it will be truncated,
     /// given the offset to where the symbol is in the compressed stream.
-    pub fn expand_symbol<'b>(
-        &self,
-        bytes: &[u8],
-        name_buf: &'b mut [u8; KSYM_NAME_LEN],
-    ) -> &'b str {
+    fn expand_symbol<'b>(&self, bytes: &[u8], name_buf: &'b mut [u8; KSYM_NAME_LEN]) -> &'b str {
         let mut i = 0;
         let mut offset = 0;
         if bytes[i] == TOKEN_MARKER {
@@ -281,7 +293,20 @@ impl<'a> KallsymsMapped<'a> {
         ))
     }
 
-    /// Lookup the address for this symbol. Returns 0 if not found.
+    /// Lookup the address for this symbol by name-order index. Returns `None` if not found.
+    /// User should call `lookup_names` first to get the name-order index for the symbol.
+    pub fn lookup_name_by_idx(&self, idx: usize) -> Option<u64> {
+        if idx >= self.kallsyms_seqs_of_names.len() {
+            return None;
+        }
+        let seq = self.kallsyms_seqs_of_names[idx] as usize;
+        if seq >= self.kallsyms_addresses.len() {
+            return None;
+        }
+        Some(self.kallsyms_addresses[seq])
+    }
+
+    /// Lookup the address for this symbol. Returns `None` if not found.
     ///
     /// See <https://elixir.bootlin.com/linux/v6.6/source/kernel/kallsyms.c#L265>
     pub fn lookup_name(&self, name: &str) -> Option<u64> {

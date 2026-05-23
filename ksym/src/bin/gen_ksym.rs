@@ -236,6 +236,9 @@ impl KallsymsBlob {
             }
         }
 
+        // reserve space for total bytes
+        blob.extend_from_slice(&0u64.to_le_bytes());
+
         blob.extend_from_slice(&(self.kallsyms_num_syms as u64).to_le_bytes());
 
         // addresses [u64]
@@ -271,6 +274,10 @@ impl KallsymsBlob {
         for &idx in &self.token_index {
             blob.extend_from_slice(&idx.to_le_bytes());
         }
+
+        let total_len = blob.len() as u64;
+        // Write total bytes at the beginning
+        blob[0..8].copy_from_slice(&total_len.to_le_bytes());
 
         blob
     }
@@ -347,6 +354,16 @@ fn simple_test() {
 
     let binary_blob = blob.to_blob();
     println!("Binary blob size: {} bytes", binary_blob.len());
+    assert_eq!(
+        ksym::KallsymsMapped::check_total_bytes(&binary_blob),
+        Ok(binary_blob.len() as u64)
+    );
+    let mut extended_blob = binary_blob.clone();
+    extended_blob.push(0);
+    assert!(matches!(
+        ksym::KallsymsMapped::from_blob(&extended_blob, 0x1000, 0x1600),
+        Err("The total bytes in the blob does not match the actual blob length")
+    ));
 
     let mapped = ksym::KallsymsMapped::from_blob(&binary_blob, 0x1000, 0x1600).expect("parse blob");
 
@@ -374,6 +391,11 @@ fn simple_test() {
         "The address of cpu_startup_entry should be 0x1200 instead of 0x1400"
     );
     assert_eq!(mapped.lookup_name("do_fork_2"), Some(0x1300));
+    let (name_idx, _) = mapped
+        .lookup_names("do_fork_2", false)
+        .expect("do_fork_2 should exist");
+    assert_eq!(mapped.lookup_name_by_idx(name_idx), Some(0x1300));
+    assert_eq!(mapped.lookup_name_by_idx(usize::MAX), None);
 
     assert_eq!(
         mapped.lookup_name("_ZN6axtask4task9TaskInner4name17h96bec46d2d8f1ab4E"),
@@ -390,7 +412,7 @@ fn simple_test() {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test() {
+    fn interface_test() {
         super::simple_test();
     }
 }

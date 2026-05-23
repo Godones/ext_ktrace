@@ -28,7 +28,7 @@ KallsymsBlob 是构建期的数据容器，用于收集符号并压缩、序列�
 - kallsyms_addresses: Vec<u64>
   - 每个符号的虚拟地址，按升序排列（即“地址序”）。
 - kallsyms_num_syms: usize
-  - 符号数量（同时也会以 u64 形式写入 blob 头）。
+  - 符号数量（会以 u64 形式写入 `total_bytes` 之后）。
 
 关系示意：
 - 地址序下的第 i 个符号：
@@ -68,18 +68,19 @@ KallsymsBlob 是构建期的数据容器，用于收集符号并压缩、序列�
 
 布局顺序（括号中为对齐要求）：
 
-1) num_syms: u64
-2) addresses[num_syms]: u64[]  (align 8)
-3) offsets[num_syms]: u32[]    (align 4)
-4) seqs[num_syms]: u32[]       (align 4)
-5) names:                      (align 8)
+1) total_bytes: u64
+2) num_syms: u64
+3) addresses[num_syms]: u64[]  (align 8)
+4) offsets[num_syms]: u32[]    (align 4)
+5) seqs[num_syms]: u32[]       (align 4)
+6) names:                      (align 8)
    - names_len: u64
    - names_bytes[names_len]: u8[]
      - 重复的“名称条目记录”：`[type: u8] [len: u16(le)] [payload: u8[len]]`
-6) token_table:                (align 8)
+7) token_table:                (align 8)
    - token_table_len: u64
    - token_table_bytes[token_table_len]: u8[]
-7) token_index:                (align 8 for len, then align 4 for array)
+8) token_index:                (align 8 for len, then align 4 for array)
    - token_index_len: u64
    - token_index[token_index_len]: u32[] (align 4)
 
@@ -100,7 +101,7 @@ KallsymsBlob 是构建期的数据容器，用于收集符号并压缩、序列�
 - token 数量上限 512；token id 为 u16。
 - 每个名称条目的压缩后长度字段为 u16（小端），单条记录最大 65535 字节。
 - `kallsyms_offsets` 为 u32，限制 `kallsyms_names` 总长度 < 4GiB。
-- 顶层整数（num_syms、addresses、offsets、seqs、names_len、token_table_len、token_index_len 和 token_index 内容）均以小端写入；名称条目长度同为小端。
+- 顶层整数（total_bytes、num_syms、addresses、offsets、seqs、names_len、token_table_len、token_index_len 和 token_index 内容）均以小端写入；名称条目长度同为小端。
 - 压缩仅在名称开头使用一个 token，其余部分为原始字节；若需要更高压缩比，可扩展为混合策略（前缀+后缀等）。
 
 ## 生成与使用
