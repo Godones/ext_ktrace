@@ -23,9 +23,9 @@ pub mod prog;
 pub mod raw_tracepoint;
 
 /// Type alias for BPF results and errors.
-pub type BpfResult<T> = axerrno::LinuxResult<T>;
+pub type BpfResult<T> = ax_errno::LinuxResult<T>;
 /// Type alias for BPF errors.
-pub type BpfError = axerrno::LinuxError;
+pub type BpfError = ax_errno::LinuxError;
 
 /// PollWaiter trait for maps that support polling.
 pub trait PollWaker: Send + Sync {

@@ -14,7 +14,7 @@ description = "A no_std Rust eBPF foundation library for kernel or kernel-like e
 [dependencies]
 printf-compat = { version = "0.4", default-features = false }
 bitflags = "2"
-lru = "0.16"
+lru = "0.18"
 log = "0.4"
 int-enum = "1.2"
-axerrno = "0.2"
+ax-errno = "0.6.0"
