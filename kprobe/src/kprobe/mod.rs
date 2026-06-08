@@ -38,7 +38,7 @@ pub(crate) fn __register_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - An registered kprobe.
 ///
 pub fn register_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     kprobe_point_list: &mut ProbePointList<F>,
     kprobe_builder: ProbeBuilder<F>,
 ) -> Result<Arc<Kprobe<L, F>>, ProbeInstallError> {
@@ -56,7 +56,7 @@ pub fn register_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - `kprobe`: The kprobe to unregister.
 ///
 pub fn unregister_kprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     kprobe_point_list: &mut ProbePointList<F>,
     kprobe: Arc<Kprobe<L, F>>,
 ) {
@@ -85,7 +85,7 @@ pub fn kprobe_handler_from_break<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
     // log::debug!("kprobe_handler_from_break: break_addr: {:#x}", break_addr);
     let kprobe_list = manager.get_break_list(break_addr);
     if let Some(kprobe_list) = kprobe_list {
-        for kprobe in kprobe_list {
+        for kprobe in kprobe_list.iter() {
             if kprobe.is_enabled() {
                 kprobe.call_pre_handler(pt_regs);
             }
@@ -115,7 +115,7 @@ pub fn kprobe_handler_from_debug<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 ) -> Option<()> {
     let pc = pt_regs.debug_address();
     if let Some(kprobe_list) = manager.get_debug_list(pc) {
-        for kprobe in kprobe_list {
+        for kprobe in kprobe_list.iter() {
             if kprobe.is_enabled() {
                 kprobe.call_post_handler(pt_regs);
                 kprobe.call_event_callback(pt_regs);

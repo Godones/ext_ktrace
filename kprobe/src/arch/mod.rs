@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, collections::btree_map::BTreeMap, string::String, sync::Arc};
+use alloc::{boxed::Box, collections::btree_map::BTreeMap, string::String, sync::Arc, vec::Vec};
 use core::{
     any::Any,
     fmt::Debug,
@@ -193,7 +193,7 @@ pub struct ProbeBuilder<F: KprobeAuxiliaryOps> {
     pub(crate) pre_handler: Option<ProbeHandler>,
     pub(crate) post_handler: Option<ProbeHandler>,
     pub(crate) fault_handler: Option<ProbeHandler>,
-    pub(crate) event_callbacks: BTreeMap<u32, Box<dyn CallBackFunc>>,
+    pub(crate) event_callbacks: BTreeMap<u32, Arc<dyn CallBackFunc>>,
     pub(crate) probe_point: Option<Arc<ProbePoint<F>>>,
     pub(crate) enable: bool,
     pub(crate) data: Option<Box<dyn ProbeData>>,
@@ -289,7 +289,7 @@ impl<F: KprobeAuxiliaryOps> ProbeBuilder<F> {
     pub fn with_event_callback(
         mut self,
         callback_id: u32,
-        event_callback: Box<dyn CallBackFunc>,
+        event_callback: Arc<dyn CallBackFunc>,
     ) -> Self {
         self.event_callbacks.insert(callback_id, event_callback);
         self
@@ -309,7 +309,7 @@ pub struct ProbeBasic<L: RawMutex + 'static> {
     pre_handler: Option<ProbeHandler>,
     post_handler: Option<ProbeHandler>,
     fault_handler: Option<ProbeHandler>,
-    event_callbacks: Mutex<L, BTreeMap<u32, Box<dyn CallBackFunc>>>,
+    event_callbacks: Mutex<L, BTreeMap<u32, Arc<dyn CallBackFunc>>>,
     enable: AtomicBool,
     data: Box<dyn ProbeData>,
 }
@@ -348,14 +348,20 @@ impl<L: RawMutex + 'static> ProbeBasic<L> {
 
     /// Call the event callback function.
     pub fn call_event_callback(&self, pt_regs: &mut PtRegs) {
-        let event_callbacks = self.event_callbacks.lock();
-        for callback in event_callbacks.values() {
+        let event_callbacks = {
+            let guard = self.event_callbacks.lock();
+            guard
+                .iter()
+                .map(|(_, callback)| callback.clone())
+                .collect::<Vec<_>>()
+        };
+        for callback in event_callbacks {
             callback.call(pt_regs);
         }
     }
 
     /// Register the event callback function.
-    pub fn register_event_callback(&self, callback_id: u32, callback: Box<dyn CallBackFunc>) {
+    pub fn register_event_callback(&self, callback_id: u32, callback: Arc<dyn CallBackFunc>) {
         self.event_callbacks.lock().insert(callback_id, callback);
     }
 

@@ -347,6 +347,11 @@ impl PtRegs {
     pub fn second_ret_value(&self) -> usize {
         self.rdx
     }
+
+    /// Get the arguments from the registers according to the x86_64 calling convention.
+    pub fn args(&self) -> [usize; 6] {
+        [self.rdi, self.rsi, self.rdx, self.rcx, self.r8, self.r9]
+    }
 }
 
 const KERNEL_DS: usize = 24; // Kernel data segment selector

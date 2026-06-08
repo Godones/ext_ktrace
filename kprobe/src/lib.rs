@@ -97,7 +97,7 @@ impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> Clone for UniProbe<L, F> {
 ///
 /// See [`register_kprobe`] for more details.
 pub fn register_kretprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps + 'static>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     kprobe_point_list: &mut ProbePointList<F>,
     kretprobe_builder: KretprobeBuilder<L>,
 ) -> Result<Arc<Kretprobe<L, F>>, ProbeInstallError> {
@@ -121,7 +121,7 @@ pub fn register_kretprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps + 'static
 ///
 /// See [`unregister_kprobe`] for more details.
 pub fn unregister_kretprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     kprobe_point_list: &mut ProbePointList<F>,
     kretprobe: Arc<Kretprobe<L, F>>,
 ) {

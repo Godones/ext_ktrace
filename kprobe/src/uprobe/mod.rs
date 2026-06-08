@@ -21,7 +21,7 @@ pub type Uprobe<L, F> = Probe<L, F>;
 /// - An registered uprobe.
 ///
 pub fn register_uprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     uprobe_point_list: &mut ProbePointList<F>,
     uprobe_builder: ProbeBuilder<F>,
 ) -> Result<Arc<Uprobe<L, F>>, ProbeInstallError> {
@@ -43,7 +43,7 @@ pub fn register_uprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - `uprobe`: The uprobe to unregister.
 ///
 pub fn unregister_uprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    manager: &mut ProbeManager<L, F>,
+    manager: &ProbeManager<L, F>,
     uprobe_point_list: &mut ProbePointList<F>,
     uprobe: Arc<Uprobe<L, F>>,
 ) {
@@ -65,14 +65,14 @@ pub fn unregister_uprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 /// - An `Option` containing the result of the uprobe handler. If no uprobe is found, it returns `None`.
 ///
 pub fn uprobe_handler_from_break<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
-    uprobe_manager: &mut ProbeManager<L, F>,
+    uprobe_manager: &ProbeManager<L, F>,
     pt_regs: &mut PtRegs,
 ) -> Option<()> {
     let break_addr = pt_regs.break_address();
     // log::debug!("uprobe_handler_from_break: break_addr: {:#x}", break_addr);
     let uprobe_list = uprobe_manager.get_break_list(break_addr);
     if let Some(uprobe_list) = uprobe_list {
-        for uprobe in uprobe_list {
+        for uprobe in uprobe_list.iter() {
             if uprobe.is_enabled() {
                 uprobe.call_pre_handler(pt_regs);
             }
@@ -130,7 +130,7 @@ pub fn uprobe_handler_from_debug<L: RawMutex + 'static, F: KprobeAuxiliaryOps>(
 ) -> Option<()> {
     let pc = pt_regs.debug_address();
     if let Some(uprobe_list) = uprobe_manager.get_debug_list(pc) {
-        for uprobe in uprobe_list {
+        for uprobe in uprobe_list.iter() {
             if uprobe.is_enabled() {
                 uprobe.call_post_handler(pt_regs);
                 uprobe.call_event_callback(pt_regs);

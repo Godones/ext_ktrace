@@ -21,7 +21,7 @@ pub struct Retprobe<L: RawMutex + 'static, F: KprobeAuxiliaryOps> {
     nmissed: AtomicU64,
     entry_handler: Option<ProbeHandler>,
     ret_handler: Option<ProbeHandler>,
-    event_callbacks: Mutex<L, BTreeMap<u32, Box<dyn CallBackFunc>>>,
+    event_callbacks: Mutex<L, BTreeMap<u32, Arc<dyn CallBackFunc>>>,
 }
 
 unsafe impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> Send for Retprobe<L, F> {}
@@ -56,7 +56,7 @@ impl<L: RawMutex + 'static, F: KprobeAuxiliaryOps> Retprobe<L, F> {
     }
 
     /// Register the event callback function.
-    pub fn register_event_callback(&self, callback_id: u32, callback: Box<dyn CallBackFunc>) {
+    pub fn register_event_callback(&self, callback_id: u32, callback: Arc<dyn CallBackFunc>) {
         self.event_callbacks.lock().insert(callback_id, callback);
     }
 
@@ -267,7 +267,13 @@ pub(crate) fn rethook_trampoline_handler<L: RawMutex + 'static, F: KprobeAuxilia
     }
 
     // call the event callbacks if they exist
-    for callback in retprobe.event_callbacks.lock().values() {
+    let event_callbacks = retprobe
+        .event_callbacks
+        .lock()
+        .iter()
+        .map(|(_, callback)| callback.clone())
+        .collect::<Vec<_>>();
+    for callback in event_callbacks {
         callback.call(pt_regs);
     }
 

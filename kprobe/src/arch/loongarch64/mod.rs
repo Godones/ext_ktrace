@@ -255,6 +255,20 @@ impl PtRegs {
     pub fn second_ret_value(&self) -> usize {
         self.regs[5]
     }
+
+    /// Get the arguments from the registers according to the LoongArch64 calling convention.
+    pub fn args(&self) -> [usize; 8] {
+        [
+            self.regs[4],
+            self.regs[5],
+            self.regs[6],
+            self.regs[7],
+            self.regs[8],
+            self.regs[9],
+            self.regs[10],
+            self.regs[11],
+        ]
+    }
 }
 
 /// Set up a single step for the given address.

@@ -306,6 +306,20 @@ impl PtRegs {
     pub fn second_ret_value(&self) -> usize {
         self.regs[1] as usize
     }
+
+    /// Get the arguments from the registers according to the AArch64 calling convention.
+    pub fn args(&self) -> [usize; 8] {
+        [
+            self.regs[0] as usize, // x0 (a0)
+            self.regs[1] as usize, // x1 (a1)
+            self.regs[2] as usize, // x2 (a2)
+            self.regs[3] as usize, // x3 (a3)
+            self.regs[4] as usize, // x4 (a4)
+            self.regs[5] as usize, // x5 (a5)
+            self.regs[6] as usize, // x6 (a6)
+            self.regs[7] as usize,
+        ] // x7 (a7)  
+    }
 }
 
 /// See <https://elixir.bootlin.com/linux/v6.6/source/arch/arm64/kernel/probes/kprobes_trampoline.S#L10>

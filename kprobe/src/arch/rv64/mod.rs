@@ -352,6 +352,11 @@ impl PtRegs {
     pub fn second_ret_value(&self) -> usize {
         self.a1
     }
+
+    /// Get the arguments from the registers according to the RISC-V calling convention.
+    pub fn args(&self) -> [usize; 6] {
+        [self.a0, self.a1, self.a2, self.a3, self.a4, self.a5]
+    }
 }
 
 #[unsafe(naked)]
