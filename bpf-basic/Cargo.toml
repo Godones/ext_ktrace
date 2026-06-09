@@ -1,6 +1,6 @@
 [package]
 name = "kbpf-basic"
-version = "0.5.7"
+version = "0.6.0"
 edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
