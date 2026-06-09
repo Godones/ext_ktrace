@@ -1,5 +1,7 @@
 use core::ffi::c_void;
 
+use lock_api::RawMutex;
+
 use crate::{
     BpfError, BpfResult as Result, KernelAuxiliaryOps,
     map::{
@@ -45,12 +47,13 @@ pub fn raw_bpf_ringbuf_output<F: KernelAuxiliaryOps>(
 }
 
 pub fn bpf_ringbuf_output<F: KernelAuxiliaryOps>(
-    unified_map: &mut UnifiedMap,
+    unified_map: &UnifiedMap<F::MapLock>,
     data: &[u8],
     flags: u64,
 ) -> Result<()> {
-    let ringbuf_map = unified_map
-        .map_mut()
+    let mut map = unified_map.map_mut();
+
+    let ringbuf_map = map
         .as_any_mut()
         .downcast_mut::<RingBufMap<F>>()
         .ok_or(BpfError::EINVAL)?;
@@ -76,21 +79,19 @@ pub fn raw_bpf_ringbuf_reserve<F: KernelAuxiliaryOps>(
     if flags != 0 {
         return core::ptr::null_mut();
     }
-    let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
+    F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
         bpf_ringbuf_reserve::<F>(unified_map, size)
-    });
-    match res {
-        Ok(ptr) => ptr,
-        Err(_) => core::ptr::null_mut(),
-    }
+    })
+    .unwrap_or(core::ptr::null_mut())
 }
 
 pub fn bpf_ringbuf_reserve<F: KernelAuxiliaryOps>(
-    unified_map: &mut UnifiedMap,
+    unified_map: &UnifiedMap<F::MapLock>,
     size: u64,
 ) -> Result<*mut u8> {
-    let ringbuf_map = unified_map
-        .map_mut()
+    let mut map = unified_map.map_mut();
+
+    let ringbuf_map = map
         .as_any_mut()
         .downcast_mut::<RingBufMap<F>>()
         .ok_or(BpfError::EINVAL)?;
@@ -162,13 +163,14 @@ pub fn raw_bpf_ringbuf_query<F: KernelAuxiliaryOps>(map: *mut c_void, flags: u64
 }
 
 pub fn bpf_ringbuf_query<F: KernelAuxiliaryOps>(
-    unified_map: &mut UnifiedMap,
+    unified_map: &UnifiedMap<F::MapLock>,
     flags: u64,
 ) -> Result<u64> {
-    let ringbuf_map = unified_map
-        .map()
-        .as_any()
-        .downcast_ref::<RingBufMap<F>>()
+    let mut map = unified_map.map_mut();
+
+    let ringbuf_map = map
+        .as_any_mut()
+        .downcast_mut::<RingBufMap<F>>()
         .ok_or(BpfError::EINVAL)?;
 
     match flags {
@@ -216,7 +218,7 @@ pub fn raw_bpf_ringbuf_reserve_dynptr<F: KernelAuxiliaryOps>(
 }
 
 pub fn bpf_ringbuf_reserve_dynptr<F: KernelAuxiliaryOps>(
-    unified_map: &mut UnifiedMap,
+    unified_map: &UnifiedMap<F::MapLock>,
     size: u32,
     bpf_dyn_ptr: &mut BpfDynPtr,
 ) -> Result<()> {
@@ -227,8 +229,9 @@ pub fn bpf_ringbuf_reserve_dynptr<F: KernelAuxiliaryOps>(
         return Err(BpfError::EINVAL);
     };
 
-    let ringbuf_map = unified_map
-        .map_mut()
+    let mut map = unified_map.map_mut();
+
+    let ringbuf_map = map
         .as_any_mut()
         .downcast_mut::<RingBufMap<F>>()
         .ok_or(BpfError::EINVAL)?;

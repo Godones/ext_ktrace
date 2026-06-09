@@ -11,6 +11,7 @@
 extern crate alloc;
 use alloc::{string::String, vec::Vec};
 
+use lock_api::RawMutex;
 use map::UnifiedMap;
 
 use crate::preprocessor::EbpfInst;
@@ -36,14 +37,16 @@ pub trait PollWaker: Send + Sync {
 /// The KernelAuxiliaryOps trait provides auxiliary operations which should
 /// be implemented by the kernel or a kernel-like environment.
 pub trait KernelAuxiliaryOps: Send + Sync + 'static {
-    /// Get a unified map from a pointer.
+    /// The associated type for the map lock, which must implement RawMutex.
+    type MapLock: RawMutex + 'static;
+    /// Get a unified map from a user space pointer.
     fn get_unified_map_from_ptr<F, R>(ptr: *const u8, func: F) -> BpfResult<R>
     where
-        F: FnOnce(&mut UnifiedMap) -> BpfResult<R>;
+        F: FnOnce(&UnifiedMap<Self::MapLock>) -> BpfResult<R>;
     /// Get a unified map from a file descriptor.
     fn get_unified_map_from_fd<F, R>(map_fd: u32, func: F) -> BpfResult<R>
     where
-        F: FnOnce(&mut UnifiedMap) -> BpfResult<R>;
+        F: FnOnce(&UnifiedMap<Self::MapLock>) -> BpfResult<R>;
     /// Get a unified map pointer from a file descriptor.
     fn get_unified_map_ptr_from_fd(map_fd: u32) -> BpfResult<*const u8>;
     /// Translate eBPF instructions, which may involve relocating map file descriptors.
@@ -74,8 +77,8 @@ pub trait KernelAuxiliaryOps: Send + Sync + 'static {
     fn free_page(phys_addr: usize);
     /// Create a virtual mapping for the given physical addresses. Return the virtual address.
     fn vmap(phys_addrs: &[usize]) -> BpfResult<usize>;
-    /// Unmap the given virtual address.
-    fn unmap(vaddr: usize);
+    /// Unmap the virtual address range corresponding to the given virtual address and number of pages.
+    fn vunmap(vaddr: usize, num_pages: usize);
 }
 
 struct DummyAuxImpl;
@@ -102,17 +105,35 @@ impl EbpfInst for DummyInst {
     }
 }
 
+struct DummyMapLock;
+unsafe impl RawMutex for DummyMapLock {
+    type GuardMarker = lock_api::GuardNoSend;
+    const INIT: Self = DummyMapLock;
+    fn lock(&self) {
+        // No actual locking needed for the dummy implementation
+    }
+
+    fn try_lock(&self) -> bool {
+        true
+    }
+
+    unsafe fn unlock(&self) {
+        // No actual unlocking needed for the dummy implementation
+    }
+}
+
 impl KernelAuxiliaryOps for DummyAuxImpl {
+    type MapLock = DummyMapLock;
     fn get_unified_map_from_ptr<F, R>(_ptr: *const u8, _func: F) -> BpfResult<R>
     where
-        F: FnOnce(&mut UnifiedMap) -> BpfResult<R>,
+        F: FnOnce(&UnifiedMap<Self::MapLock>) -> BpfResult<R>,
     {
         Err(BpfError::EPERM)
     }
 
     fn get_unified_map_from_fd<F, R>(_map_fd: u32, _func: F) -> BpfResult<R>
     where
-        F: FnOnce(&mut UnifiedMap) -> BpfResult<R>,
+        F: FnOnce(&UnifiedMap<Self::MapLock>) -> BpfResult<R>,
     {
         Err(BpfError::EPERM)
     }
@@ -168,5 +189,5 @@ impl KernelAuxiliaryOps for DummyAuxImpl {
         Err(BpfError::EPERM)
     }
 
-    fn unmap(_vaddr: usize) {}
+    fn vunmap(_vaddr: usize, _num_pages: usize) {}
 }

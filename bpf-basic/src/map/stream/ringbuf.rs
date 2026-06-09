@@ -39,7 +39,7 @@ pub struct RingBuf<F: KernelAuxiliaryOps> {
     nr_pages: u32,
     mask: u64,
     pages: &'static [InnerPage<F>],
-    phys_addrs: &'static [usize],
+    phy_addrs: &'static [usize],
     // we can't directly use Arc<dyn PollWaker> here because RingBuf is
     // created in a special way (with vmap), so we store a raw pointer.
     poll_waker: *const dyn PollWaker,
@@ -104,6 +104,7 @@ const fn is_page_aligned(size: u32) -> bool {
     size & (4096 - 1) == 0
 }
 /// 8-byte ring buffer record header structure
+#[repr(C)]
 pub struct BpfRingBufHdr {
     len: u32,
     pg_off: u32,
@@ -147,7 +148,7 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
          */
 
         let mut pages = Vec::with_capacity(nr_pages);
-        let mut phys_addrs = vec![0usize; nr_meta_pages + 2 * nr_data_pages];
+        let mut phy_addrs = vec![0usize; nr_meta_pages + 2 * nr_data_pages];
 
         log::trace!(
             "Creating ringbuf with {} pages ({} meta pages, {} data pages)",
@@ -160,20 +161,20 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
          */
         for i in 0..nr_pages {
             let page = InnerPage::<F>::new()?;
-            phys_addrs[i] = page.phys_addr();
+            phy_addrs[i] = page.phy_addr();
             if i >= nr_meta_pages {
-                phys_addrs[nr_data_pages + i] = page.phys_addr();
+                phy_addrs[nr_data_pages + i] = page.phy_addr();
             }
             pages.push(page);
         }
 
-        let vaddr = F::vmap(&phys_addrs)?;
+        let vaddr = F::vmap(&phy_addrs)?;
 
         let ringbuf = unsafe { &mut *(vaddr as *mut RingBuf<F>) };
 
         ringbuf.mask = (map_meta.max_entries - 1) as u64;
         ringbuf.nr_pages = nr_pages as u32;
-        ringbuf.phys_addrs = phys_addrs.leak();
+        ringbuf.phy_addrs = phy_addrs.leak();
 
         let waker_ptr: *const dyn PollWaker = Arc::into_raw(poll_waker);
         ringbuf.poll_waker = waker_ptr;
@@ -293,8 +294,8 @@ impl<F: KernelAuxiliaryOps> RingBuf<F> {
         // update producer position
         self.set_producer_pos(new_prod_pos);
 
-        let data_buf =
-            &mut data_buf[prod_idx + BPF_RINGBUF_HDR_SZ as usize..prod_idx + aligned_size as usize];
+        let payload_start = prod_idx + BPF_RINGBUF_HDR_SZ as usize;
+        let data_buf = &mut data_buf[payload_start..payload_start + size as usize];
         Ok(data_buf)
     }
 
@@ -382,18 +383,12 @@ impl<F: KernelAuxiliaryOps> BpfMapCommonOps for RingBufMap<F> {
         self
     }
 
-    fn map_mmap(
-        &self,
-        offset: usize,
-        size: usize,
-        _read: bool,
-        _write: bool,
-    ) -> Result<Vec<usize>> {
+    fn map_mmap(&self, offset: usize, size: usize) -> Result<Vec<usize>> {
         let offset = offset + (RINGBUF_PGOFF << PAGE_SHIFT);
         let page_idx = offset >> PAGE_SHIFT;
         let range = size >> PAGE_SHIFT;
-        let phys_addrs = self.ringbuf.phys_addrs[page_idx..page_idx + range].to_vec();
-        Ok(phys_addrs)
+        let phy_addrs = self.ringbuf.phy_addrs[page_idx..page_idx + range].to_vec();
+        Ok(phy_addrs)
     }
 
     fn readable(&self) -> bool {
@@ -430,13 +425,17 @@ impl<F: KernelAuxiliaryOps> Drop for RingBufMap<F> {
 
         let phys_addrs = unsafe {
             Vec::from_raw_parts(
-                self.ringbuf.phys_addrs.as_ptr() as *mut usize,
+                self.ringbuf.phy_addrs.as_ptr() as *mut usize,
                 phys_pages,
                 phys_pages,
             )
         };
-        // Unmap the pages.
-        F::unmap(self.ringbuf as *mut RingBuf<F> as usize);
+
+        // unmap the ringbuf virtual address range
+        F::vunmap(
+            self.ringbuf as *mut RingBuf<F> as usize,
+            self.ringbuf.phy_addrs.len(),
+        );
 
         drop(phys_addrs);
         drop(pages);

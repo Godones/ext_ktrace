@@ -18,7 +18,7 @@ impl<F: KernelAuxiliaryOps> InnerPage<F> {
         })
     }
 
-    pub fn phys_addr(&self) -> usize {
+    pub fn phy_addr(&self) -> usize {
         self.addr
     }
 }

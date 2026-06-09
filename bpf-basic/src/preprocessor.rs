@@ -8,9 +8,12 @@
 //!
 use alloc::{vec, vec::Vec};
 
+use lock_api::RawMutex;
+
 use crate::{
     BpfResult as Result, KernelAuxiliaryOps,
     linux_bpf::{BPF_PSEUDO_MAP_FD, BPF_PSEUDO_MAP_VALUE},
+    map::UnifiedMap,
 };
 
 /// eBPF preprocessor for relocating map file descriptors in eBPF instructions.
@@ -37,7 +40,9 @@ const LD_DW_IMM: u8 = 0x18;
 
 impl EbpfPreProcessor {
     /// Preprocess the instructions to relocate the map file descriptors.
-    pub fn preprocess<F: KernelAuxiliaryOps>(mut instructions: Vec<u8>) -> Result<Self> {
+    pub fn preprocess<F: KernelAuxiliaryOps, L: RawMutex + 'static>(
+        mut instructions: Vec<u8>,
+    ) -> Result<Self> {
         let mut fmt_insn = F::translate_instruction(instructions.clone())?;
         let mut index = 0;
         let mut raw_file_ptr = vec![];
@@ -57,9 +62,12 @@ impl EbpfPreProcessor {
                     BPF_PSEUDO_MAP_VALUE => {
                         // dst = map_val(map_by_fd(imm)) + next_imm
                         // map_val(map) gets the address of the first value in a given map
-                        let value_ptr = F::get_unified_map_from_fd(map_fd as u32, |unified_map| {
-                            unified_map.map().map_values_ptr_range()
-                        })?;
+                        let value_ptr = F::get_unified_map_from_fd(
+                            map_fd as u32,
+                            |unified_map: &UnifiedMap<F::MapLock>| {
+                                unified_map.map().map_values_ptr_range()
+                            },
+                        )?;
                         let offset = next_insn.imm() as usize;
                         log::trace!(
                             "Relocate for BPF_PSEUDO_MAP_VALUE, instruction index: {}, map_fd: {}, ptr: {:#x}, offset: {}",

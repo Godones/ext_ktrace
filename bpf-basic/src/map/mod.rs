@@ -15,6 +15,8 @@ use alloc::{
 };
 use core::{any::Any, ffi::CStr, fmt::Debug, ops::Range};
 
+use lock_api::{Mutex, MutexGuard, RawMutex};
+
 use crate::{
     BpfError, BpfResult as Result, KernelAuxiliaryOps, PollWaker,
     linux_bpf::{BpfMapType, bpf_attr},
@@ -101,13 +103,7 @@ pub trait BpfMapCommonOps: Send + Sync + Debug + Any {
     fn map_mem_usage(&self) -> Result<usize>;
 
     /// Memory map the map into user space. Return the physical address.
-    fn map_mmap(
-        &self,
-        _offset: usize,
-        _size: usize,
-        _read: bool,
-        _write: bool,
-    ) -> Result<Vec<usize>> {
+    fn map_mmap(&self, _offset: usize, _size: usize) -> Result<Vec<usize>> {
         Err(BpfError::EPERM)
     }
 
@@ -218,26 +214,26 @@ impl TryFrom<&bpf_attr> for BpfMapMeta {
 
 /// A unified BPF map that can hold any type of BPF map.
 #[derive(Debug)]
-pub struct UnifiedMap {
-    inner_map: Box<dyn BpfMapCommonOps>,
+pub struct UnifiedMap<L: RawMutex + 'static> {
+    inner_map: Mutex<L, Box<dyn BpfMapCommonOps>>,
     map_meta: BpfMapMeta,
 }
 
-impl UnifiedMap {
+impl<L: RawMutex + 'static> UnifiedMap<L> {
     fn new(map_meta: BpfMapMeta, map: Box<dyn BpfMapCommonOps>) -> Self {
         Self {
-            inner_map: map,
+            inner_map: Mutex::new(map),
             map_meta,
         }
     }
     /// Get a reference to the concrete map.
-    pub fn map(&self) -> &dyn BpfMapCommonOps {
-        self.inner_map.as_ref()
+    pub fn map(&self) -> MutexGuard<'_, L, Box<dyn BpfMapCommonOps>> {
+        self.inner_map.lock()
     }
 
     /// Get a mutable reference to the concrete map.
-    pub fn map_mut(&mut self) -> &mut dyn BpfMapCommonOps {
-        self.inner_map.as_mut()
+    pub fn map_mut(&self) -> MutexGuard<'_, L, Box<dyn BpfMapCommonOps>> {
+        self.inner_map.lock()
     }
 
     /// Get the map metadata.
@@ -254,7 +250,7 @@ impl UnifiedMap {
 pub fn bpf_map_create<F: KernelAuxiliaryOps, T: PerCpuVariantsOps + 'static>(
     map_meta: BpfMapMeta,
     poll_waker: Option<Arc<dyn PollWaker>>,
-) -> Result<UnifiedMap> {
+) -> Result<UnifiedMap<F::MapLock>> {
     log::trace!("The map attr is {:#?}", map_meta);
     let map: Box<dyn BpfMapCommonOps> = match map_meta.map_type {
         BpfMapType::BPF_MAP_TYPE_ARRAY => {
@@ -370,8 +366,10 @@ impl From<&bpf_attr> for BpfMapGetNextKeyArg {
 /// Create or update an element (key/value pair) in a specified map.
 ///
 /// See <https://ebpf-docs.dylanreimerink.nl/linux/syscall/BPF_MAP_UPDATE_ELEM/>
-pub fn bpf_map_update_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Result<()> {
-    F::get_unified_map_from_fd(arg.map_fd, |unified_map| {
+pub fn bpf_map_update_elem<F: KernelAuxiliaryOps, L: RawMutex + 'static>(
+    arg: BpfMapUpdateArg,
+) -> Result<()> {
+    F::get_unified_map_from_fd::<_, _>(arg.map_fd, |unified_map| {
         let meta = unified_map.map_meta();
         let key_size = meta.key_size as usize;
         let value_size = meta.value_size as usize;
@@ -384,14 +382,16 @@ pub fn bpf_map_update_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Resul
 }
 
 /// Freeze a map to prevent further modifications.
-pub fn bpf_map_freeze<F: KernelAuxiliaryOps>(map_fd: u32) -> Result<()> {
+pub fn bpf_map_freeze<F: KernelAuxiliaryOps, L: RawMutex + 'static>(map_fd: u32) -> Result<()> {
     F::get_unified_map_from_fd(map_fd, |unified_map| unified_map.map().freeze())
 }
 
 ///  Look up an element by key in a specified map and return its value.
 ///
 /// See <https://ebpf-docs.dylanreimerink.nl/linux/syscall/BPF_MAP_LOOKUP_ELEM/>
-pub fn bpf_lookup_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Result<()> {
+pub fn bpf_lookup_elem<F: KernelAuxiliaryOps, L: RawMutex + 'static>(
+    arg: BpfMapUpdateArg,
+) -> Result<()> {
     // info!("<bpf_lookup_elem>: {:#x?}", arg);
     F::get_unified_map_from_fd(arg.map_fd, |unified_map| {
         let meta = unified_map.map_meta();
@@ -399,10 +399,12 @@ pub fn bpf_lookup_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Result<()
         let value_size = meta.value_size as usize;
         let mut key = vec![0u8; key_size];
         F::copy_from_user(arg.key as *const u8, key_size, &mut key)?;
-        let map = unified_map.map_mut();
-        let r_value = map.lookup_elem(&key)?;
+        let r_value = {
+            let mut map = unified_map.map_mut();
+            map.lookup_elem(&key)?.map(|v| v.to_vec())
+        };
         if let Some(r_value) = r_value {
-            F::copy_to_user(arg.value as *mut u8, value_size, r_value)?;
+            F::copy_to_user(arg.value as *mut u8, value_size, &r_value)?;
             Ok(())
         } else {
             Err(BpfError::ENOENT)
@@ -416,19 +418,22 @@ pub fn bpf_lookup_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Result<()
 /// - If key is the last element, returns -1 and errno is set to ENOENT.
 ///
 /// See <https://ebpf-docs.dylanreimerink.nl/linux/syscall/BPF_MAP_GET_NEXT_KEY/>
-pub fn bpf_map_get_next_key<F: KernelAuxiliaryOps>(arg: BpfMapGetNextKeyArg) -> Result<()> {
+pub fn bpf_map_get_next_key<F: KernelAuxiliaryOps, L: RawMutex + 'static>(
+    arg: BpfMapGetNextKeyArg,
+) -> Result<()> {
     // info!("<bpf_map_get_next_key>: {:#x?}", arg);
     F::get_unified_map_from_fd(arg.map_fd, |unified_map| {
         let meta = unified_map.map_meta();
         let key_size = meta.key_size as usize;
-        let map = unified_map.map_mut();
         let mut next_key = vec![0u8; key_size];
         if let Some(key_ptr) = arg.key {
             let mut key = vec![0u8; key_size];
             F::copy_from_user(key_ptr as *const u8, key_size, &mut key)?;
-            map.get_next_key(Some(&key), &mut next_key)?;
+            unified_map
+                .map_mut()
+                .get_next_key(Some(&key), &mut next_key)?;
         } else {
-            map.get_next_key(None, &mut next_key)?;
+            unified_map.map_mut().get_next_key(None, &mut next_key)?;
         };
         F::copy_to_user(arg.next_key as *mut u8, key_size, &next_key)?;
         Ok(())
@@ -443,7 +448,9 @@ pub fn bpf_map_get_next_key<F: KernelAuxiliaryOps>(arg: BpfMapGetNextKeyArg) -> 
 /// instead a zero value can be written to the map value. Check the map types page to check for support.
 ///
 /// See <https://ebpf-docs.dylanreimerink.nl/linux/syscall/BPF_MAP_DELETE_ELEM/>
-pub fn bpf_map_delete_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Result<()> {
+pub fn bpf_map_delete_elem<F: KernelAuxiliaryOps, L: RawMutex + 'static>(
+    arg: BpfMapUpdateArg,
+) -> Result<()> {
     // info!("<bpf_map_delete_elem>: {:#x?}", arg);
     F::get_unified_map_from_fd(arg.map_fd, |unified_map| {
         let meta = unified_map.map_meta();
@@ -485,7 +492,9 @@ pub fn bpf_map_lookup_batch<F: KernelAuxiliaryOps>(_arg: BpfMapUpdateArg) -> Res
 ///
 ///
 /// See <https://ebpf-docs.dylanreimerink.nl/linux/syscall/BPF_MAP_LOOKUP_AND_DELETE_ELEM/>
-pub fn bpf_map_lookup_and_delete_elem<F: KernelAuxiliaryOps>(arg: BpfMapUpdateArg) -> Result<()> {
+pub fn bpf_map_lookup_and_delete_elem<F: KernelAuxiliaryOps, L: RawMutex + 'static>(
+    arg: BpfMapUpdateArg,
+) -> Result<()> {
     // info!("<bpf_map_lookup_and_delete_elem>: {:#x?}", arg);
     F::get_unified_map_from_fd(arg.map_fd, |unified_map| {
         let meta = unified_map.map_meta();

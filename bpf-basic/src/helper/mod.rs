@@ -8,6 +8,7 @@ use core::{
 };
 
 use consts::BPF_F_CURRENT_CPU;
+use lock_api::RawMutex;
 
 use crate::{
     BpfError, BpfResult as Result, KernelAuxiliaryOps,
@@ -149,7 +150,7 @@ pub fn raw_map_lookup_elem<F: KernelAuxiliaryOps>(
         let meta = unified_map.map_meta();
         let key_size = meta.key_size as usize;
         let key = unsafe { core::slice::from_raw_parts(key as *const u8, key_size) };
-        let value = map_lookup_elem(unified_map, key)?;
+        let value = map_lookup_elem::<F>(unified_map, key)?;
         Ok(value)
     });
     match res {
@@ -159,8 +160,11 @@ pub fn raw_map_lookup_elem<F: KernelAuxiliaryOps>(
 }
 
 /// Lookup an element in map.
-pub fn map_lookup_elem(unified_map: &mut UnifiedMap, key: &[u8]) -> Result<Option<*const u8>> {
-    let map = unified_map.map_mut();
+pub fn map_lookup_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
+    key: &[u8],
+) -> Result<Option<*const u8>> {
+    let mut map = unified_map.map_mut();
     let value = map.lookup_elem(key);
     match value {
         Ok(Some(value)) => Ok(Some(value.as_ptr())),
@@ -192,7 +196,7 @@ pub fn raw_perf_event_output<F: KernelAuxiliaryOps>(
 /// Output data to a perf event.
 pub fn perf_event_output<F: KernelAuxiliaryOps>(
     ctx: *mut c_void,
-    unified_map: &mut UnifiedMap,
+    unified_map: &UnifiedMap<F::MapLock>,
     flags: u64,
     data: &[u8],
 ) -> Result<()> {
@@ -203,7 +207,7 @@ pub fn perf_event_output<F: KernelAuxiliaryOps>(
     } else {
         index
     };
-    let map = unified_map.map_mut();
+    let mut map = unified_map.map_mut();
     let fd = map
         .lookup_elem(&key.to_ne_bytes())?
         .ok_or(BpfError::ENOENT)?;
@@ -249,7 +253,7 @@ pub fn raw_map_update_elem<F: KernelAuxiliaryOps>(
         let value_size = meta.value_size as usize;
         let key = unsafe { core::slice::from_raw_parts(key as *const u8, key_size) };
         let value = unsafe { core::slice::from_raw_parts(value as *const u8, value_size) };
-        map_update_elem(unified_map, key, value, flags)
+        map_update_elem::<F>(unified_map, key, value, flags)
     });
     match res {
         Ok(_) => 0,
@@ -258,13 +262,13 @@ pub fn raw_map_update_elem<F: KernelAuxiliaryOps>(
 }
 
 /// Update entry with key in map.
-pub fn map_update_elem(
-    unified_map: &mut UnifiedMap,
+pub fn map_update_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
     key: &[u8],
     value: &[u8],
     flags: u64,
 ) -> Result<()> {
-    let map = unified_map.map_mut();
+    let mut map = unified_map.map_mut();
 
     map.update_elem(key, value, flags)
 }
@@ -277,7 +281,7 @@ pub fn raw_map_delete_elem<F: KernelAuxiliaryOps>(map: *mut c_void, key: *const 
         let meta = unified_map.map_meta();
         let key_size = meta.key_size as usize;
         let key = unsafe { core::slice::from_raw_parts(key as *const u8, key_size) };
-        map_delete_elem(unified_map, key)
+        map_delete_elem::<F>(unified_map, key)
     });
     match res {
         Ok(_) => 0,
@@ -286,8 +290,11 @@ pub fn raw_map_delete_elem<F: KernelAuxiliaryOps>(map: *mut c_void, key: *const 
 }
 
 /// Delete entry with key from map.
-pub fn map_delete_elem(unified_map: &mut UnifiedMap, key: &[u8]) -> Result<()> {
-    let map = unified_map.map_mut();
+pub fn map_delete_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
+    key: &[u8],
+) -> Result<()> {
+    let mut map = unified_map.map_mut();
 
     map.delete_elem(key)
 }
@@ -319,7 +326,7 @@ pub fn raw_map_for_each_elem<F: KernelAuxiliaryOps>(
     }
     let res = F::get_unified_map_from_ptr(map as *const u8, |unified_map| {
         let cb = unsafe { *(cb as *const BpfCallBackFn) };
-        map_for_each_elem(unified_map, cb, ctx as _, flags)
+        map_for_each_elem::<F>(unified_map, cb, ctx as _, flags)
     });
     match res {
         Ok(v) => v as i64,
@@ -328,13 +335,13 @@ pub fn raw_map_for_each_elem<F: KernelAuxiliaryOps>(
 }
 
 /// Do some action for each element in map.
-pub fn map_for_each_elem(
-    unified_map: &mut UnifiedMap,
+pub fn map_for_each_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
     cb: BpfCallBackFn,
     ctx: *const u8,
     flags: u64,
 ) -> Result<u32> {
-    let map = unified_map.map_mut();
+    let mut map = unified_map.map_mut();
 
     map.for_each_elem(cb, ctx, flags)
 }
@@ -351,7 +358,7 @@ pub fn raw_map_lookup_percpu_elem<F: KernelAuxiliaryOps>(
         let meta = unified_map.map_meta();
         let key_size = meta.key_size as usize;
         let key = unsafe { core::slice::from_raw_parts(key as *const u8, key_size) };
-        map_lookup_percpu_elem(unified_map, key, cpu)
+        map_lookup_percpu_elem::<F>(unified_map, key, cpu)
     });
     match res {
         Ok(Some(value)) => value as *const c_void,
@@ -360,12 +367,12 @@ pub fn raw_map_lookup_percpu_elem<F: KernelAuxiliaryOps>(
 }
 
 /// Lookup an element in percpu map.
-pub fn map_lookup_percpu_elem(
-    unified_map: &mut UnifiedMap,
+pub fn map_lookup_percpu_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
     key: &[u8],
     cpu: u32,
 ) -> Result<Option<*const u8>> {
-    let map = unified_map.map_mut();
+    let mut map = unified_map.map_mut();
     let value = map.lookup_percpu_elem(key, cpu);
     match value {
         Ok(Some(value)) => Ok(Some(value.as_ptr())),
@@ -384,7 +391,7 @@ pub fn raw_map_push_elem<F: KernelAuxiliaryOps>(
         let meta = unified_map.map_meta();
         let value_size = meta.value_size as usize;
         let value = unsafe { core::slice::from_raw_parts(value as *const u8, value_size) };
-        map_push_elem(unified_map, value, flags)
+        map_push_elem::<F>(unified_map, value, flags)
     });
     match res {
         Ok(_) => 0,
@@ -393,8 +400,12 @@ pub fn raw_map_push_elem<F: KernelAuxiliaryOps>(
 }
 
 /// Push an element value in map.
-pub fn map_push_elem(unified_map: &mut UnifiedMap, value: &[u8], flags: u64) -> Result<()> {
-    let map = unified_map.map_mut();
+pub fn map_push_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
+    value: &[u8],
+    flags: u64,
+) -> Result<()> {
+    let mut map = unified_map.map_mut();
 
     map.push_elem(value, flags)
 }
@@ -407,7 +418,7 @@ pub fn raw_map_pop_elem<F: KernelAuxiliaryOps>(map: *mut c_void, value: *mut c_v
         let meta = unified_map.map_meta();
         let value_size = meta.value_size as usize;
         let value = unsafe { core::slice::from_raw_parts_mut(value as *mut u8, value_size) };
-        map_pop_elem(unified_map, value)
+        map_pop_elem::<F>(unified_map, value)
     });
     match res {
         Ok(_) => 0,
@@ -416,8 +427,11 @@ pub fn raw_map_pop_elem<F: KernelAuxiliaryOps>(map: *mut c_void, value: *mut c_v
 }
 
 /// Pop an element from map.
-pub fn map_pop_elem(unified_map: &mut UnifiedMap, value: &mut [u8]) -> Result<()> {
-    let map = unified_map.map_mut();
+pub fn map_pop_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
+    value: &mut [u8],
+) -> Result<()> {
+    let mut map = unified_map.map_mut();
 
     map.pop_elem(value)
 }
@@ -430,7 +444,7 @@ pub fn raw_map_peek_elem<F: KernelAuxiliaryOps>(map: *mut c_void, value: *mut c_
         let meta = unified_map.map_meta();
         let value_size = meta.value_size as usize;
         let value = unsafe { core::slice::from_raw_parts_mut(value as *mut u8, value_size) };
-        map_peek_elem(unified_map, value)
+        map_peek_elem::<F>(unified_map, value)
     });
     match res {
         Ok(_) => 0,
@@ -439,8 +453,11 @@ pub fn raw_map_peek_elem<F: KernelAuxiliaryOps>(map: *mut c_void, value: *mut c_
 }
 
 /// Get an element from map without removing it.
-pub fn map_peek_elem(unified_map: &mut UnifiedMap, value: &mut [u8]) -> Result<()> {
-    let map = unified_map.map_mut();
+pub fn map_peek_elem<F: KernelAuxiliaryOps>(
+    unified_map: &UnifiedMap<F::MapLock>,
+    value: &mut [u8],
+) -> Result<()> {
+    let mut map = unified_map.map_mut();
 
     map.peek_elem(value)
 }
